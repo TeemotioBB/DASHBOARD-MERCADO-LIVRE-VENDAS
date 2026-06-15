@@ -22,11 +22,14 @@ function loadDB() {
 
 let _writing = Promise.resolve();
 function saveDB(db) {
-  _writing = _writing.then(() => new Promise((resolve) => {
+  _writing = _writing.then(() => new Promise((resolve, reject) => {
     const tmp = DB_FILE + '.tmp';
     fs.writeFile(tmp, JSON.stringify(db, null, 2), (err) => {
-      if (err) { console.error('Erro ao gravar:', err); return resolve(); }
-      fs.rename(tmp, DB_FILE, () => resolve());
+      if (err) { console.error('[saveDB] ERRO ao gravar em', DB_FILE, '->', err.message); return reject(err); }
+      fs.rename(tmp, DB_FILE, (err2) => {
+        if (err2) { console.error('[saveDB] ERRO ao renomear ->', err2.message); return reject(err2); }
+        resolve();
+      });
     });
   }));
   return _writing;
@@ -109,6 +112,31 @@ app.delete('/api/months/:mes', requireAdmin, async (req, res) => {
 // API — Mercado Livre
 // ══════════════════════════════════════════════
 
+// Diagnóstico: testa se o DATA_DIR é gravável e o que está salvo
+app.get('/api/meli/diag', requireAdmin, (req, res) => {
+  const info = { data_dir: DATA_DIR, db_file: DB_FILE };
+  // teste de escrita real
+  try {
+    const probe = path.join(DATA_DIR, '.write-test');
+    fs.writeFileSync(probe, String(Date.now()));
+    fs.unlinkSync(probe);
+    info.writable = true;
+  } catch (e) {
+    info.writable = false;
+    info.write_error = e.message;
+  }
+  // db.json existe? que lojas tem token?
+  info.db_exists = fs.existsSync(DB_FILE);
+  info.tokens_em_memoria = Object.keys(DB.tokens || {});
+  try {
+    if (info.db_exists) {
+      const disk = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      info.tokens_no_disco = Object.keys(disk.tokens || {});
+    }
+  } catch (e) { info.read_error = e.message; }
+  res.json(info);
+});
+
 // Status da integração: quais lojas estão conectadas
 app.get('/api/meli/status', requireAdmin, (req, res) => {
   const configured = mlConfigured();
@@ -151,12 +179,14 @@ app.get('/oauth/callback', async (req, res) => {
       user_id: data.user_id,
     };
     await saveDB(DB);
+    console.log('[oauth] Loja', loja, 'conectada e salva. user_id=', data.user_id, 'em', DB_FILE);
     res.send(`<html><body style="font-family:sans-serif;background:#0d0f14;color:#E8EAF0;padding:40px">
       <h2>✓ Loja "${loja}" conectada com sucesso!</h2>
       <p>Pode fechar esta aba e voltar ao dashboard.</p>
       <script>setTimeout(()=>{ window.close(); }, 2000);</script>
     </body></html>`);
   } catch (e) {
+    console.error('[oauth] FALHA ao conectar loja', loja, '->', e.message);
     res.status(500).send('Erro ao conectar: ' + e.message);
   }
 });
