@@ -561,6 +561,13 @@
       <div class="section-title"><div class="left"><div class="dot" style="background:var(--yellow)"></div>Resultado</div></div>
       <div id="meliResult" style="font-size:12px"></div>
     </div>
+
+    <!-- Diagnóstico -->
+    <div class="section">
+      <div class="section-title"><div class="left"><div class="dot" style="background:var(--muted)"></div>Diagnóstico (resolução de problemas)</div></div>
+      <button class="srv-btn" onclick="meliDiag()">🩺 Rodar diagnóstico</button>
+      <pre id="meliDiagOut" style="display:none;margin-top:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11px;color:var(--text);overflow:auto;white-space:pre-wrap"></pre>
+    </div>
   </div>
 
 </div>
@@ -2096,6 +2103,20 @@ async function meliDisconnect(loja){
     meliRefreshStatus();
     showToast('Loja desconectada');
   }catch(e){ showToast('✗ Erro'); }
+}
+
+// Diagnóstico: mostra se o servidor consegue gravar e onde estão os tokens
+async function meliDiag(){
+  if(!IS_ADMIN){ showToast('Entre como admin'); return; }
+  const out = document.getElementById('meliDiagOut');
+  out.style.display=''; out.textContent='Consultando…';
+  try{
+    const r = await fetch('/api/meli/diag', { headers:{ 'x-admin-token': ADMIN_TOKEN } });
+    const d = await r.json();
+    out.textContent = JSON.stringify(d, null, 2);
+  }catch(e){
+    out.textContent = 'Erro ao consultar diagnóstico: ' + e.message;
+  }
 }
 
 // Busca os dados do período e preenche o faturamento por dia no dashboard
