@@ -215,9 +215,11 @@ app.delete('/api/meli/connect/:loja', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Sincronizar: busca dados das 3 lojas para um período e devolve consolidado
+// Sincronizar: busca dados das 3 lojas para um período e devolve consolidado.
+// LIBERADO para qualquer visitante: apenas LÊ da API do ML e devolve os números.
+// Não grava nada no servidor (só o admin salva via /api/state).
 // Body: { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
-app.post('/api/meli/sync', requireAdmin, async (req, res) => {
+app.post('/api/meli/sync', async (req, res) => {
   if (!mlConfigured()) return res.status(400).json({ error: 'Integração não configurada' });
   const from = (req.body && req.body.from) || '';
   const to   = (req.body && req.body.to)   || '';
