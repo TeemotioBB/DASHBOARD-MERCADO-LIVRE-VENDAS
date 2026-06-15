@@ -128,12 +128,29 @@ app.get('/api/meli/diag', requireAdmin, (req, res) => {
   // db.json existe? que lojas tem token?
   info.db_exists = fs.existsSync(DB_FILE);
   info.tokens_em_memoria = Object.keys(DB.tokens || {});
+  // mostra quais campos cada token tem (sem expor os valores)
+  info.token_campos = {};
+  for (const k of Object.keys(DB.tokens || {})) {
+    const t = DB.tokens[k] || {};
+    info.token_campos[k] = {
+      tem_access_token: !!t.access_token,
+      tem_refresh_token: !!t.refresh_token,
+      tem_user_id: t.user_id != null,
+      expira_em: t.expires_at ? new Date(t.expires_at).toISOString() : null,
+    };
+  }
   try {
     if (info.db_exists) {
       const disk = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
       info.tokens_no_disco = Object.keys(disk.tokens || {});
     }
   } catch (e) { info.read_error = e.message; }
+  // inclui o que a rota de status devolveria, para comparar
+  info.status_lojas = meli.LOJAS.map(l => ({
+    key: l.key,
+    conectada: !!(DB.tokens[l.key] && DB.tokens[l.key].refresh_token),
+    user_id: DB.tokens[l.key] ? DB.tokens[l.key].user_id : null,
+  }));
   res.json(info);
 });
 
