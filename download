@@ -1,0 +1,52 @@
+# Dashboard Meli — Acompanhamento de Vendas
+
+Dashboard com servidor próprio: os dados ficam salvos no servidor (não no navegador),
+então qualquer pessoa que abrir o link vê os mesmos números. Só o administrador pode editar.
+
+## Como funciona
+
+- **Visitantes** (sem senha): veem o dashboard em modo somente leitura.
+- **Administrador** (com senha): clica em **🔑 Entrar (admin)**, digita a senha, e passa a poder editar.
+  - **💾 Salvar** → grava as alterações no servidor (todos passam a ver).
+  - **📦 Consolidar mês** → arquiva o mês atual no histórico, para poder **filtrar/visualizar depois**.
+  - O seletor de mês (canto superior) permite abrir qualquer mês já consolidado.
+
+Importante: enquanto você edita, nada é enviado ao servidor até clicar em **Salvar**.
+O botão fica com um `*` quando há mudanças não salvas.
+
+## Subir no Railway (passo a passo)
+
+1. Crie um repositório no GitHub com estes arquivos (ou use o Railway CLI).
+2. No Railway: **New Project → Deploy from GitHub repo** (ou **Empty Project → Deploy**).
+3. O Railway detecta Node automaticamente e roda `npm start`.
+4. Em **Variables**, adicione:
+   - `ADMIN_TOKEN` = a senha de administrador que você quiser (ex.: uma frase forte).
+   - `DATA_DIR` = `/data`
+5. Em **Settings → Volumes**, crie um **Volume** e monte em `/data`.
+   - Isso garante que os dados não se percam entre deploys/reinícios.
+6. Em **Settings → Networking**, clique em **Generate Domain** para obter o link público.
+7. Pronto. Mande o link para a equipe. Para editar, clique em "Entrar (admin)" e use a senha.
+
+> Sem o Volume em `/data`, os dados ainda funcionam, mas podem ser apagados a cada novo deploy.
+> Com o Volume, ficam permanentes.
+
+## Rodar localmente (teste)
+
+```bash
+npm install
+ADMIN_TOKEN="minhasenha" npm start
+# abre http://localhost:3000
+```
+
+## Variáveis de ambiente
+
+| Variável      | Padrão              | Descrição                                  |
+|---------------|---------------------|--------------------------------------------|
+| `ADMIN_TOKEN` | `trocar-este-token` | Senha de administrador (defina a sua!)     |
+| `DATA_DIR`    | `./data`            | Pasta onde o `db.json` é salvo             |
+| `PORT`        | `3000`              | Porta (o Railway define automaticamente)   |
+
+## Backup
+
+Os dados ficam num único arquivo `db.json` dentro de `DATA_DIR`. Para backup,
+basta copiar esse arquivo.
