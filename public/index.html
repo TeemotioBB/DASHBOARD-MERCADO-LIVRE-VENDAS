@@ -526,40 +526,37 @@
 <div class="tab-panel" id="tab-integracao">
 
   <div style="background:rgba(255,230,0,0.06);border:1px solid rgba(255,230,0,0.2);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--text)">
-    🔌 <strong>Integração automática com o Mercado Livre.</strong> Conecte cada loja uma vez (login no ML). Depois, clique em <b>Atualizar dados</b> para puxar o faturamento do período direto da API — sem digitação manual. Só o admin pode conectar/atualizar.
-  </div>
-
-  <div id="meliNotAdmin" class="section" style="display:none">
-    <div style="color:var(--muted);font-size:13px">Entre no modo <strong>admin</strong> (botão 🔑 no topo) para gerenciar a integração.</div>
+    🔌 <strong>Integração automática com o Mercado Livre.</strong> Clique em <b>Atualizar dados</b> para puxar o faturamento do período direto da API. Qualquer pessoa pode atualizar e ver os números; apenas o admin pode <b>salvar</b> (gravar para todos) e conectar/desconectar lojas.
   </div>
 
   <div id="meliNotConfigured" class="section" style="display:none">
     <div style="color:var(--orange);font-size:13px">⚠️ A integração ainda não está configurada no servidor. Faltam as variáveis <code>ML_CLIENT_ID</code>, <code>ML_CLIENT_SECRET</code> e <code>PUBLIC_URL</code> no Railway.</div>
   </div>
 
+  <!-- Atualizar dados — VISÍVEL PARA TODOS -->
+  <div class="section" id="meliUpdateSection">
+    <div class="section-title"><div class="left"><div class="dot" style="background:var(--green)"></div>Atualizar dados do período</div></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+      <div class="cfg-field"><label class="config-label">De</label><input type="date" class="cfg-input" id="meliFrom" style="width:160px"></div>
+      <div class="cfg-field"><label class="config-label">Até</label><input type="date" class="cfg-input" id="meliTo" style="width:160px"></div>
+      <button class="srv-btn primary" id="meliSyncBtn" onclick="meliSync()">🔄 Atualizar dados</button>
+      <span id="meliLastSync" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+    <div class="config-note" style="margin-top:10px">Busca os pedidos pagos de cada loja no período. Os números aparecem na tela para qualquer pessoa. <strong>Só o admin</strong>, ao clicar em 💾 Salvar (topo), grava para todos verem por padrão.</div>
+  </div>
+
+  <!-- Resultado da sincronização — VISÍVEL PARA TODOS -->
+  <div class="section" id="meliResultWrap" style="display:none">
+    <div class="section-title"><div class="left"><div class="dot" style="background:var(--yellow)"></div>Resultado</div></div>
+    <div id="meliResult" style="font-size:12px"></div>
+  </div>
+
+  <!-- Área só do admin: conexão de lojas e diagnóstico -->
   <div id="meliPanel" style="display:none">
     <!-- Status das lojas -->
     <div class="section">
-      <div class="section-title"><div class="left"><div class="dot" style="background:var(--blue)"></div>Lojas conectadas</div></div>
+      <div class="section-title"><div class="left"><div class="dot" style="background:var(--blue)"></div>Lojas conectadas (admin)</div></div>
       <div id="meliLojas" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px"></div>
-    </div>
-
-    <!-- Atualizar dados -->
-    <div class="section">
-      <div class="section-title"><div class="left"><div class="dot" style="background:var(--green)"></div>Atualizar dados do período</div></div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-        <div class="cfg-field"><label class="config-label">De</label><input type="date" class="cfg-input" id="meliFrom" style="width:160px"></div>
-        <div class="cfg-field"><label class="config-label">Até</label><input type="date" class="cfg-input" id="meliTo" style="width:160px"></div>
-        <button class="srv-btn primary" id="meliSyncBtn" onclick="meliSync()">🔄 Atualizar dados</button>
-        <span id="meliLastSync" style="font-size:11px;color:var(--muted)"></span>
-      </div>
-      <div class="config-note" style="margin-top:10px">Busca os pedidos pagos de cada loja no período e preenche o faturamento por dia automaticamente. Os outros campos (metas, Ads, etc.) continuam em Configurações.</div>
-    </div>
-
-    <!-- Resultado da última sincronização -->
-    <div class="section" id="meliResultWrap" style="display:none">
-      <div class="section-title"><div class="left"><div class="dot" style="background:var(--yellow)"></div>Resultado</div></div>
-      <div id="meliResult" style="font-size:12px"></div>
     </div>
 
     <!-- Diagnóstico -->
@@ -1538,14 +1535,11 @@ function updateCompareSelectors(){
     else el.value = '';
   };
 
-  // Defaults inteligentes na primeira vez: penúltimo → último
-  const defBase = names.length>=2 ? names[names.length-2] : '';
-  const defTarget = names.length>=1 ? names[names.length-1] : '';
-
-  fill('cmpBase', cmpSel.base || defBase, 'Mês base…');
-  fill('cmpTarget', cmpSel.target || defTarget, 'Comparar com…');
-  fill('cmpAdsBase', cmpAdsSel.base || defBase, 'Mês base…');
-  fill('cmpAdsTarget', cmpAdsSel.target || defTarget, 'Comparar com…');
+  // Comparador começa VAZIO: o usuário escolhe os meses manualmente.
+  fill('cmpBase', cmpSel.base, 'Mês base…');
+  fill('cmpTarget', cmpSel.target, 'Comparar com…');
+  fill('cmpAdsBase', cmpAdsSel.base, 'Mês base…');
+  fill('cmpAdsTarget', cmpAdsSel.target, 'Comparar com…');
 
   // Sincroniza estado a partir do DOM (caso defaults tenham sido aplicados)
   cmpSel.base = document.getElementById('cmpBase').value;
@@ -2030,13 +2024,21 @@ window.addEventListener('beforeunload', (e)=>{
 const LOJA_LABELS = { rj:'Meli RJ', bh:'Meli BH', es:'Meli ES' };
 
 async function meliRefreshStatus(){
-  const notAdmin = document.getElementById('meliNotAdmin');
   const notConf  = document.getElementById('meliNotConfigured');
   const panel    = document.getElementById('meliPanel');
-  notAdmin.style.display='none'; notConf.style.display='none'; panel.style.display='none';
+  notConf.style.display='none'; panel.style.display='none';
 
-  if(!IS_ADMIN){ notAdmin.style.display=''; return; }
+  // datas padrão (início do mês até hoje) — para TODOS
+  const hoje = new Date();
+  const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  const f = document.getElementById('meliFrom'), t = document.getElementById('meliTo');
+  if(f && !f.value) f.value = ini.toISOString().slice(0,10);
+  if(t && !t.value) t.value = hoje.toISOString().slice(0,10);
 
+  // Sem admin: o visitante já vê a seção "Atualizar dados". Não busca status (rota é admin).
+  if(!IS_ADMIN){ return; }
+
+  // Admin: mostra status das lojas + conectar/desconectar
   try{
     const r = await fetch('/api/meli/status', { headers:{ 'x-admin-token': ADMIN_TOKEN } });
     if(!r.ok) throw new Error('status '+r.status);
@@ -2045,7 +2047,6 @@ async function meliRefreshStatus(){
     if(!data.configured){ notConf.style.display=''; return; }
     panel.style.display='';
 
-    // status das lojas
     const wrap = document.getElementById('meliLojas');
     wrap.innerHTML = (data.lojas||[]).map(function(l){
       var ok = l.conectada;
@@ -2063,16 +2064,8 @@ async function meliRefreshStatus(){
         + '</div>';
     }).join('');
 
-    // última sincronização
     const ls = document.getElementById('meliLastSync');
     ls.textContent = data.last_sync ? ('Última atualização: '+new Date(data.last_sync).toLocaleString('pt-BR')) : 'Nunca atualizado';
-
-    // datas padrão: início do mês até hoje
-    const hoje = new Date();
-    const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const f = document.getElementById('meliFrom'), t = document.getElementById('meliTo');
-    if(f && !f.value) f.value = ini.toISOString().slice(0,10);
-    if(t && !t.value) t.value = hoje.toISOString().slice(0,10);
   }catch(e){
     showToast('✗ Erro ao ler status ML');
   }
@@ -2119,9 +2112,9 @@ async function meliDiag(){
   }
 }
 
-// Busca os dados do período e preenche o faturamento por dia no dashboard
+// Busca os dados do período. Funciona para QUALQUER pessoa (admin ou visitante).
+// Só preenche a tela; salvar (gravar para todos) continua sendo ação do admin.
 async function meliSync(){
-  if(!IS_ADMIN) return;
   const from = document.getElementById('meliFrom').value;
   const to   = document.getElementById('meliTo').value;
   if(!from || !to){ showToast('Escolha o período (De / Até)'); return; }
@@ -2133,16 +2126,20 @@ async function meliSync(){
   try{
     const r = await fetch('/api/meli/sync', {
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-admin-token': ADMIN_TOKEN },
+      headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify({ from, to })
     });
     const data = await r.json();
     if(!r.ok) throw new Error(data.error||('status '+r.status));
 
-    aplicarDadosMeli(data);    // joga os números no dashboard
+    aplicarDadosMeli(data);    // joga os números na tela
     mostrarResultadoMeli(data);
-    meliRefreshStatus();
-    showToast('✓ Dados atualizados — confira e clique em Salvar');
+    if(IS_ADMIN){
+      meliRefreshStatus();
+      showToast('✓ Dados atualizados — confira e clique em Salvar');
+    } else {
+      showToast('✓ Dados atualizados na sua tela');
+    }
   }catch(e){
     showToast('✗ '+e.message);
   }finally{
