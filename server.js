@@ -346,26 +346,44 @@ app.post('/api/meli/curva', async (req, res) => {
     }
   }
 
-  // 2) Classificação ABC por GIRO (unidades vendidas) via Pareto acumulado.
-  // Para reposição de estoque, o que importa é o quanto o item SAI em quantidade,
-  // não quanto fatura — assim um item de ticket alto que vendeu 1 unidade não
-  // é tratado como prioridade A. A vem antes de B, garantindo que o maior giro
-  // sempre fique em A.
+  // 2) Classificação ABC HÍBRIDA via Pareto acumulado.
+  // Calcula DUAS curvas — uma por giro (unidades) e outra por faturamento — e
+  // atribui a cada item a MELHOR das duas. Assim, tanto um item de alto giro
+  // (ex.: reservatório, 131 un) quanto um de alta receita mas poucas vendas
+  // (ex.: lanterna cara, 2 un) ficam em A. Só cai em C quem é irrelevante nos dois.
   let lista = Object.values(itensConsolidados);
   const fatTotal = lista.reduce((s,it)=>s+it.faturamento, 0) || 1;
   const unidTotal = lista.reduce((s,it)=>s+(it.unidades||0), 0) || 1;
-  lista.sort((a,b)=> (b.unidades||0) - (a.unidades||0));
-  let acumulado = 0;
+
+  // Função genérica: classifica a lista por um "valor" via Pareto e grava em campoCurva
+  function classificarPareto(valorDe, total, campoCurva){
+    const ordenada = lista.slice().sort((a,b)=> valorDe(b) - valorDe(a));
+    let acum = 0;
+    for (const it of ordenada) {
+      const pctAntes = acum / total;
+      acum += valorDe(it);
+      it[campoCurva] = pctAntes < 0.80 ? 'A' : (pctAntes < 0.95 ? 'B' : 'C');
+    }
+  }
+  classificarPareto(it=> it.unidades||0, unidTotal, 'curvaGiro');
+  classificarPareto(it=> it.faturamento||0, fatTotal, 'curvaFat');
+
+  // Curva final = melhor (mais alta) entre giro e faturamento
+  const rank = { A:3, B:2, C:1 };
   for (const it of lista) {
-    const pctAntes = acumulado / unidTotal;   // % de unidades acumulado ANTES deste item
-    acumulado += (it.unidades || 0);
-    it.curva = pctAntes < 0.80 ? 'A' : (pctAntes < 0.95 ? 'B' : 'C');
-    it.pctFaturamento = it.faturamento / fatTotal;   // mantido só para exibição
-    it.pctUnidades = (it.unidades || 0) / unidTotal; // participação no giro
+    it.curva = rank[it.curvaGiro] >= rank[it.curvaFat] ? it.curvaGiro : it.curvaFat;
+    // motivo da classificação (ajuda a entender por que é A)
+    if (it.curva === 'A') {
+      it.motivoCurva = (it.curvaGiro==='A' && it.curvaFat==='A') ? 'giro+receita'
+                     : (it.curvaGiro==='A' ? 'giro' : 'receita');
+    } else {
+      it.motivoCurva = null;
+    }
+    it.pctFaturamento = it.faturamento / fatTotal;
+    it.pctUnidades = (it.unidades || 0) / unidTotal;
     it.vendaMediaDia = (it.unidades || 0) / dias;       // unidades/dia
     it.fatMediaDia = (it.faturamento || 0) / dias;      // R$/dia
     // Cobertura: dias até o estoque zerar no ritmo de venda atual.
-    // null = sem estoque conhecido; Infinity = vende 0/dia (não zera).
     if (!it.estoqueConhecido) {
       it.coberturaDias = null;
     } else if (it.vendaMediaDia > 0) {
@@ -373,7 +391,6 @@ app.post('/api/meli/curva', async (req, res) => {
     } else {
       it.coberturaDias = Infinity;   // tem estoque mas não vende → não zera
     }
-    // Classificação do alerta de cobertura
     if (it.estoqueConhecido && it.estoque <= 0) it.alerta = 'zerado';
     else if (it.coberturaDias != null && it.coberturaDias <= 7) it.alerta = 'critico';
     else if (it.coberturaDias != null && it.coberturaDias <= 15) it.alerta = 'atencao';
