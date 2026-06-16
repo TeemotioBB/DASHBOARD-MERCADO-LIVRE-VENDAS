@@ -168,6 +168,92 @@ async function fetchLojaData({ token, userId, desde, ate }) {
   return out;
 }
 
+// ── 5. Curva ABC + estoque por item ─────────────────────────
+// Agrega as vendas por ITEM no período (faturamento e unidades), depois
+// busca o estoque atual (available_quantity) de cada item em lote.
+// Retorna a lista de itens com os dados crus; a classificação A/B/C e o
+// filtro "sem estoque" são feitos no servidor/frontend.
+//
+// `desde`/`ate` são datas ISO. Devolve:
+//   { itens: [ { id, title, sku, unidades, faturamento, estoque } ], pedidos }
+async function fetchCurvaABC({ token, userId, desde, ate }) {
+  const porItem = {};   // id -> { id, title, sku, unidades, faturamento }
+  let pedidos = 0;
+
+  // ── 5a. Percorre os pedidos pagos e soma por item ──
+  let offset = 0;
+  const limit = 50;
+  let total = Infinity;
+  while (offset < total) {
+    const path = `/orders/search?seller=${userId}`
+      + `&order.status=paid`
+      + `&order.date_created.from=${encodeURIComponent(desde)}`
+      + `&order.date_created.to=${encodeURIComponent(ate)}`
+      + `&offset=${offset}&limit=${limit}&sort=date_asc`;
+    const page = await apiGet(path, token);
+    total = (page.paging && page.paging.total) || 0;
+    const results = page.results || [];
+    for (const o of results) {
+      pedidos += 1;
+      const itens = o.order_items || [];
+      for (const oi of itens) {
+        const it = oi.item || {};
+        const id = it.id;
+        if (!id) continue;
+        const qtd = oi.quantity || 0;
+        const preco = oi.unit_price || 0;
+        if (!porItem[id]) {
+          porItem[id] = {
+            id,
+            title: it.title || id,
+            sku: it.seller_custom_field || it.seller_sku || null,
+            unidades: 0,
+            faturamento: 0,
+          };
+        }
+        porItem[id].unidades += qtd;
+        porItem[id].faturamento += qtd * preco;
+      }
+    }
+    if (results.length === 0) break;
+    offset += limit;
+    if (offset > 50000) break; // trava de segurança
+  }
+
+  // ── 5b. Busca o estoque atual de cada item, em lotes de 20 ──
+  const ids = Object.keys(porItem);
+  for (let i = 0; i < ids.length; i += 20) {
+    const lote = ids.slice(i, i + 20);
+    try {
+      // multiget: /items?ids=...&attributes=id,available_quantity,status
+      const arr = await apiGet(
+        `/items?ids=${lote.join(',')}&attributes=id,available_quantity,status,title`,
+        token
+      );
+      // resposta: [ { code, body:{ id, available_quantity, ... } }, ... ]
+      for (const entry of (Array.isArray(arr) ? arr : [])) {
+        const b = entry && entry.body;
+        if (b && b.id && porItem[b.id]) {
+          porItem[b.id].estoque = (b.available_quantity != null) ? b.available_quantity : null;
+          porItem[b.id].status = b.status || null;
+          if (b.title) porItem[b.id].title = b.title;
+        }
+      }
+    } catch (e) {
+      // se um lote falhar, segue sem o estoque desses itens
+    }
+  }
+
+  // itens sem estoque preenchido ficam com null (desconhecido)
+  const itens = Object.values(porItem).map(it => ({
+    estoque: (it.estoque != null) ? it.estoque : null,
+    status: it.status || null,
+    ...it,
+  }));
+
+  return { itens, pedidos };
+}
+
 module.exports = {
   LOJAS,
   buildAuthUrl,
@@ -175,4 +261,5 @@ module.exports = {
   refreshAccessToken,
   ensureValidToken,
   fetchLojaData,
+  fetchCurvaABC,
 };
