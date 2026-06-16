@@ -446,10 +446,8 @@ app.post('/api/meli/curva', async (req, res) => {
     .sort((a,b)=> (a.coberturaDias - b.coberturaDias) || (b.vendaMediaDia - a.vendaMediaDia));
 
   DB.meli_curva_last = new Date().toISOString();
-  await saveDB(DB);
 
-  res.json({
-    ok: true,
+  const resultadoCurva = {
     periodo: { desde, ate, dias },
     last_curva: DB.meli_curva_last,
     totalItens: lista.length,
@@ -457,7 +455,23 @@ app.post('/api/meli/curva', async (req, res) => {
     curvaAsemEstoque,
     itensZerando,
     erros,
-  });
+  };
+
+  // Persiste o último resultado no servidor, para que reapareça ao abrir o site
+  // (sem precisar recalcular). Qualquer atualização sobrescreve o anterior.
+  DB.meli_curva = resultadoCurva;
+  await saveDB(DB);
+
+  res.json({ ok: true, ...resultadoCurva });
+});
+
+// Lê o último resultado de curva salvo no servidor (para mostrar ao abrir o site)
+app.get('/api/meli/curva', (req, res) => {
+  if (DB.meli_curva) {
+    res.json({ ok: true, persisted: true, ...DB.meli_curva });
+  } else {
+    res.json({ ok: true, persisted: false, vazio: true });
+  }
 });
 
 // ──────────────────────────────────────────────
