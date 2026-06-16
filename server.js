@@ -265,19 +265,45 @@ app.post('/api/meli/curva', async (req, res) => {
   const desde = `${fmt(ini)}T00:00:00.000-03:00`;
   const ate   = `${fmt(hoje)}T23:59:59.000-03:00`;
 
-  // 1) Coleta os itens de cada loja
+  // 1) Coleta de cada loja: VENDAS (no período) e ESTOQUE de todos os ativos.
+  // Buscar o estoque de todos os anúncios ativos (não só os que venderam) é o que
+  // permite o alerta de transferência: saber que um item zerado numa loja tem
+  // estoque parado em outra.
   const erros = {};
-  const itensConsolidados = {};  // id -> item consolidado entre lojas
+  const itensConsolidados = {};  // chave -> item consolidado entre lojas
+  // guarda o estoque por loja indexado por chave (sku/id), mesmo sem venda
+  const estoquePorLojaChave = {}; // { 'rj': { 'sku:123': {estoque, id, status, title} }, ... }
+
+  function chaveDe(sku, id){ return sku ? `sku:${sku}` : `id:${id}`; }
+
   for (const l of meli.LOJAS) {
     const store = DB.tokens[l.key];
     if (!store || !store.refresh_token) { erros[l.key] = 'não conectada'; continue; }
     try {
       const { token, updatedStore } = await meli.ensureValidToken(store, { clientId: ML_CLIENT_ID, clientSecret: ML_CLIENT_SECRET });
       if (updatedStore) { DB.tokens[l.key] = updatedStore; await saveDB(DB); }
-      const { itens } = await meli.fetchCurvaABC({ token, userId: DB.tokens[l.key].user_id, desde, ate });
+      const userId = DB.tokens[l.key].user_id;
+
+      // 1a. Estoque de TODOS os anúncios ativos desta loja
+      estoquePorLojaChave[l.key] = {};
+      try {
+        const ativos = await meli.fetchEstoqueAtivos({ token, userId });
+        for (const a of ativos) {
+          const k = chaveDe(a.sku, a.id);
+          // se houver mais de um anúncio do mesmo SKU na loja, soma o estoque
+          const prev = estoquePorLojaChave[l.key][k];
+          estoquePorLojaChave[l.key][k] = {
+            estoque: (prev ? (prev.estoque||0) : 0) + (a.estoque!=null ? a.estoque : 0),
+            estoqueConhecido: true,
+            id: a.id, status: a.status, title: a.title, sku: a.sku,
+          };
+        }
+      } catch (e) { /* segue só com o estoque dos que venderam */ }
+
+      // 1b. Vendas no período
+      const { itens } = await meli.fetchCurvaABC({ token, userId, desde, ate });
       for (const it of itens) {
-        // chave: SKU (se houver) senão o id do anúncio; agrupa entre lojas
-        const chave = it.sku ? `sku:${it.sku}` : `id:${it.id}`;
+        const chave = chaveDe(it.sku, it.id);
         if (!itensConsolidados[chave]) {
           itensConsolidados[chave] = {
             chave, sku: it.sku, title: it.title,
@@ -289,14 +315,34 @@ app.post('/api/meli/curva', async (req, res) => {
         const c = itensConsolidados[chave];
         c.unidades += it.unidades || 0;
         c.faturamento += it.faturamento || 0;
-        if (it.estoque != null) { c.estoque += it.estoque; c.estoqueConhecido = true; }
-        c.porLoja[l.key] = {
-          unidades: it.unidades||0, faturamento: it.faturamento||0,
-          estoque: (it.estoque!=null)?it.estoque:null, id: it.id, status: it.status||null,
-        };
+        if (!c.porLoja[l.key]) c.porLoja[l.key] = { unidades:0, faturamento:0, estoque:null, id:it.id, status:it.status||null };
+        c.porLoja[l.key].unidades += it.unidades || 0;
+        c.porLoja[l.key].faturamento += it.faturamento || 0;
+        c.porLoja[l.key].id = it.id;
       }
     } catch (e) {
       erros[l.key] = e.message;
+    }
+  }
+
+  // 1c. Mescla o estoque (de todos os ativos) em cada item consolidado, por loja.
+  // Garante que o estoque de uma loja entre na conta mesmo sem venda no período.
+  for (const chave of Object.keys(itensConsolidados)) {
+    const c = itensConsolidados[chave];
+    c.estoque = 0; c.estoqueConhecido = false;
+    for (const l of meli.LOJAS) {
+      const est = estoquePorLojaChave[l.key] && estoquePorLojaChave[l.key][chave];
+      if (est) {
+        if (!c.porLoja[l.key]) c.porLoja[l.key] = { unidades:0, faturamento:0, id:est.id, status:est.status };
+        c.porLoja[l.key].estoque = est.estoque;
+        c.estoque += est.estoque;
+        c.estoqueConhecido = true;
+        if (!c.sku && est.sku) c.sku = est.sku;
+        if (!c.title && est.title) c.title = est.title;
+      } else if (c.porLoja[l.key] && c.porLoja[l.key].estoque == null) {
+        // vendeu nessa loja mas não achamos entre os ativos (anúncio pausado/encerrado)
+        c.porLoja[l.key].estoque = 0;
+      }
     }
   }
 
@@ -334,12 +380,43 @@ app.post('/api/meli/curva', async (req, res) => {
     else it.alerta = 'ok';
   }
 
-  // 3) Subconjunto: Curva A e B SEM estoque (ou estoque zero)
+  const lojaLabel = {}; meli.LOJAS.forEach(l=>lojaLabel[l.key]=l.label);
+
+  // Anexa, a cada item, a análise de estoque por loja:
+  //  - lojasZeradas: lojas onde o item está ativo/vendendo mas com estoque 0
+  //  - lojasComEstoque: lojas que têm estoque (candidatas a transferir)
+  //  - transferencia: sugestão "de X para Y" quando uma loja tem e outra zerou
+  for (const it of lista) {
+    const zeradas = [];
+    const comEstoque = [];
+    for (const k of Object.keys(it.porLoja||{})) {
+      const pl = it.porLoja[k];
+      const temVenda = (pl.unidades||0) > 0;
+      const est = (pl.estoque!=null) ? pl.estoque : null;
+      if (est != null && est > 0) comEstoque.push({ loja:k, label:lojaLabel[k]||k, estoque:est, vendeu:temVenda });
+      else if (est != null && est <= 0) zeradas.push({ loja:k, label:lojaLabel[k]||k, vendeu:temVenda });
+    }
+    it.lojasZeradas = zeradas;
+    it.lojasComEstoque = comEstoque;
+    // Há oportunidade de transferência se alguma loja zerou E outra tem estoque
+    it.transferencia = (zeradas.length > 0 && comEstoque.length > 0)
+      ? { de: comEstoque.slice().sort((a,b)=>b.estoque-a.estoque), para: zeradas }
+      : null;
+  }
+
+  // 3) Subconjunto: Curva A e B com ALGUMA loja zerada (precisa repor naquela loja).
+  // Inclui tanto "zerado em todas" (comprar) quanto "zerado em uma, com estoque em
+  // outra" (transferir) — o frontend diferencia pelos campos de transferência.
   const curvaAsemEstoque = lista
-    .filter(it => (it.curva === 'A' || it.curva === 'B') && it.estoqueConhecido && it.estoque <= 0)
+    .filter(it => (it.curva === 'A' || it.curva === 'B')
+                && it.estoqueConhecido
+                && (it.lojasZeradas && it.lojasZeradas.length > 0))
     .sort((a,b)=> {
-      // A vem antes de B; dentro da mesma curva, quem mais vende/dia (giro) primeiro
+      // A antes de B; depois quem pode transferir (ação mais barata) sobe;
+      // por fim, maior giro primeiro
       if (a.curva !== b.curva) return a.curva === 'A' ? -1 : 1;
+      const at = a.transferencia ? 1 : 0, bt = b.transferencia ? 1 : 0;
+      if (at !== bt) return bt - at;
       return b.vendaMediaDia - a.vendaMediaDia;
     });
 
