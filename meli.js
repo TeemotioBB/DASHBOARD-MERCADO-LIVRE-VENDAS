@@ -254,6 +254,57 @@ async function fetchCurvaABC({ token, userId, desde, ate }) {
   return { itens, pedidos };
 }
 
+// ── 6. Estoque de TODOS os anúncios ativos da loja ─────────
+// Diferente do fetchCurvaABC (que só vê itens que venderam), esta função
+// lista todos os anúncios ativos e seus estoques/SKU. Necessária porque o
+// mesmo SKU pode estar ativo numa loja sem ter vendido no período — e seu
+// estoque precisa entrar na conta para não marcar o SKU como "zerado".
+// Retorna: [ { id, sku, title, estoque, status } ]
+async function fetchEstoqueAtivos({ token, userId }) {
+  const out = [];
+  // 6a. Coleta todos os IDs de anúncios ativos (paginado)
+  const ids = [];
+  let offset = 0;
+  const limit = 100;
+  let total = Infinity;
+  while (offset < total) {
+    const search = await apiGet(
+      `/users/${userId}/items/search?status=active&offset=${offset}&limit=${limit}`,
+      token
+    );
+    total = (search.paging && search.paging.total) || 0;
+    const results = search.results || [];
+    for (const id of results) ids.push(id);
+    if (results.length === 0) break;
+    offset += limit;
+    if (offset > 50000) break; // trava de segurança
+  }
+
+  // 6b. Busca atributos (estoque/SKU/título) em lotes de 20 via multiget
+  for (let i = 0; i < ids.length; i += 20) {
+    const lote = ids.slice(i, i + 20);
+    try {
+      const arr = await apiGet(
+        `/items?ids=${lote.join(',')}&attributes=id,available_quantity,status,title,seller_custom_field,seller_sku`,
+        token
+      );
+      for (const entry of (Array.isArray(arr) ? arr : [])) {
+        const b = entry && entry.body;
+        if (b && b.id) {
+          out.push({
+            id: b.id,
+            sku: b.seller_custom_field || b.seller_sku || null,
+            title: b.title || b.id,
+            estoque: (b.available_quantity != null) ? b.available_quantity : null,
+            status: b.status || null,
+          });
+        }
+      }
+    } catch (e) { /* segue sem esse lote */ }
+  }
+  return out;
+}
+
 module.exports = {
   LOJAS,
   buildAuthUrl,
@@ -262,4 +313,5 @@ module.exports = {
   ensureValidToken,
   fetchLojaData,
   fetchCurvaABC,
+  fetchEstoqueAtivos,
 };
