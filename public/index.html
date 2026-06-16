@@ -553,7 +553,7 @@
             <th>#</th><th>Produto</th><th>SKU</th>
             <th>Curva</th><th>Faturam. 90d</th><th>% do giro</th>
             <th>Unid. vendidas</th><th>Venda média/dia</th>
-            <th>R$/dia perdido</th><th>Zerado em</th><th>Ação sugerida</th>
+            <th>R$/dia perdido</th><th>Estoque p/ filial</th>
           </tr>
         </thead>
         <tbody id="curvaBody">
@@ -1991,24 +1991,23 @@ function renderCurva(data){
   renderZerando(zerando);
 
   if(itens.length === 0){
-    body.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--green);padding:30px">
+    body.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--green);padding:30px">
       ✓ Nenhum item Curva A ou B está zerado. Estoque das prioridades em dia!</td></tr>`;
   } else {
     const curvaBg = { A:'var(--rj)', B:'#ffb020' };
     body.innerHTML = itens.map((it,i)=>{
       const cor = curvaBg[it.curva] || 'var(--muted)';
-      // "Zerado em": lojas sem estoque
-      const zeradas = (it.lojasZeradas||[]).map(z=>z.label).join(', ') || '—';
-      // "Ação sugerida": transferir (de quem tem estoque para quem zerou) ou comprar
-      let acao;
-      if (it.transferencia && it.transferencia.de.length && it.transferencia.para.length){
-        const origem = it.transferencia.de
-          .map(d=>`${d.label} (${d.estoque} un)`).join(' ou ');
-        const destino = it.transferencia.para.map(p=>p.label).join(' e ');
-        acao = `<span style="background:#1f8b4c;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap">🔄 Transferir de ${origem} para ${destino}</span>`;
-      } else {
-        acao = `<span style="background:var(--rj);color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap">🛒 Comprar</span>`;
-      }
+      // Estoque por filial em formato compacto: BH (0) · ES (6) · RJ (3)
+      // Verde = tem estoque (pode transferir); vermelho = zerado.
+      const ordemLojas = ['bh','es','rj'];
+      const lojaLabels = { bh:'BH', es:'ES', rj:'RJ' };
+      const chips = ordemLojas.map(k=>{
+        const pl = it.porLoja ? it.porLoja[k] : null;
+        const est = pl && pl.estoque != null ? pl.estoque : 0;
+        const cor = est > 0 ? '#1f8b4c' : 'var(--rj)';
+        return `<span style="color:${cor};font-weight:600;white-space:nowrap">${lojaLabels[k]} (${est})</span>`;
+      }).join(' <span style="color:var(--muted)">·</span> ');
+      const acao = `<div style="white-space:nowrap;font-size:12px">${chips}</div>`;
       return `<tr>
         <td>${i+1}</td>
         <td style="max-width:260px;white-space:normal">${escapeHtml(it.title||'—')}</td>
@@ -2019,7 +2018,6 @@ function renderCurva(data){
         <td>${it.unidades}</td>
         <td>${(it.vendaMediaDia||0).toFixed(2)}</td>
         <td style="color:${cor};font-weight:600">R$ ${fmtBR(it.fatMediaDia||0)}</td>
-        <td>${zeradas}</td>
         <td>${acao}</td>
       </tr>`;
     }).join('');
@@ -2062,14 +2060,10 @@ function exportarCurvaCsv(){
   if(!_curvaDados) return;
   const semEstoque = _curvaDados.curvaAsemEstoque || [];
   const zerando = _curvaDados.itensZerando || [];
-  const head = ['Status','Produto','SKU','Curva','Estoque','Faturamento','% do giro','Unidades vendidas','Venda media/dia','Dias ate zerar','R$/dia em risco','Zerado em','Acao sugerida'];
-  const acaoDe = (it) => {
-    if (it.transferencia && it.transferencia.de && it.transferencia.de.length && it.transferencia.para && it.transferencia.para.length){
-      const origem = it.transferencia.de.map(d=>`${d.label} (${d.estoque} un)`).join(' ou ');
-      const destino = it.transferencia.para.map(p=>p.label).join(' e ');
-      return `Transferir de ${origem} para ${destino}`;
-    }
-    return 'Comprar';
+  const head = ['Status','Produto','SKU','Curva','Estoque total','Faturamento','% do giro','Unidades vendidas','Venda media/dia','Dias ate zerar','R$/dia em risco','Estoque BH','Estoque ES','Estoque RJ'];
+  const estLoja = (it,k) => {
+    const pl = it.porLoja ? it.porLoja[k] : null;
+    return (pl && pl.estoque != null) ? pl.estoque : 0;
   };
   const linhaDe = (it, status, dias) => [
     status,
@@ -2083,8 +2077,9 @@ function exportarCurvaCsv(){
     (it.vendaMediaDia||0).toFixed(2),
     dias,
     (it.fatMediaDia||0).toFixed(2),
-    `"${(it.lojasZeradas||[]).map(z=>z.label).join(', ')}"`,
-    `"${acaoDe(it)}"`,
+    estLoja(it,'bh'),
+    estLoja(it,'es'),
+    estLoja(it,'rj'),
   ].join(',');
   const linhas = [
     ...semEstoque.map(it=>linhaDe(it,'ZERADO',0)),
