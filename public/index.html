@@ -1231,9 +1231,9 @@ function renderAds(totInvest, totRec, roasGeral, acosGeral, rjRoas, bhRoas, esRo
 // GROWTH CHART TAB
 // ════════════════════════════════════════
 function renderGrowthTab(rjTotal, bhTotal, esTotal, totalRealizado, crescTotal){
-  // Monta histórico completo incluindo mês atual
-  const allMonths = [...histMonths, {mes: config.mes||'Atual', rj:rjTotal, bh:bhTotal, es:esTotal, isCurrent:true}];
-  const totals = allMonths.map(m=>(m.rj||0)+(m.bh||0)+(m.es||0));
+  // Usa a FONTE ÚNICA: histórico + mês atual ao vivo, sem duplicar nem defasar.
+  const allMonths = buildUnifiedMonths();
+  const totals = allMonths.map(m=>m.total);
 
   // KPIs do crescimento
   const n = allMonths.length;
@@ -1496,28 +1496,66 @@ function delLastHistMonth(){
 let cmpSel = { base:'', target:'' };       // faturamento (Visão Geral)
 let cmpAdsSel = { base:'', target:'' };     // ads (aba Ads)
 
-// Monta lista unificada de meses: históricos + mês atual
-function getAllMonthsData(){
+// ── Normaliza nome de mês para comparar "Maio 2026" == "Mai/26" == "mai 2026"
+// Reduz a uma chave canônica: <mes-3-letras><ano-2-digitos>, ex: "mai26".
+const _MESES_MAP = {
+  jan:'jan', fev:'fev', mar:'mar', abr:'abr', mai:'mai', maio:'mai',
+  jun:'jun', jul:'jul', ago:'ago', set:'set', setembro:'set',
+  out:'out', nov:'nov', dez:'dez', janeiro:'jan', fevereiro:'fev',
+  marco:'mar', 'março':'mar', abril:'abr', junho:'jun', julho:'jul',
+  agosto:'ago', outubro:'out', novembro:'nov', dezembro:'dez'
+};
+function normMonthKey(nome){
+  if(!nome) return '';
+  const s = String(nome).toLowerCase().replace(/[\.\/]/g,' ').trim();
+  const mMatch = s.match(/[a-zç]+/);
+  const yMatch = s.match(/(\d{2,4})/);
+  let mes = mMatch ? mMatch[0] : '';
+  mes = _MESES_MAP[mes] || mes.slice(0,3);
+  let ano = yMatch ? yMatch[1] : '';
+  if(ano.length === 4) ano = ano.slice(2);   // 2026 -> 26
+  return mes + ano;
+}
+
+// ── FONTE ÚNICA DA VERDADE para a lista de meses ──
+// Junta o histórico (histMonths) com o mês atual (calculado AO VIVO das linhas
+// diárias). Se o mês atual já existir no histórico (mesmo com nome em outro
+// formato), a entrada do histórico é SUBSTITUÍDA pelos valores ao vivo — evitando
+// número defasado (ex.: 98 mil arquivado vs 260 mil real) e duplicidade no gráfico.
+function buildUnifiedMonths(){
   const rjTotal = rows.reduce((s,r)=>s+(r.rj||0),0);
   const bhTotal = rows.reduce((s,r)=>s+(r.bh||0),0);
   const esTotal = rows.reduce((s,r)=>s+(r.es||0),0);
-  const list = histMonths.map(m=>({
-    mes: m.mes,
-    rj: m.rj||0, bh: m.bh||0, es: m.es||0,
-    total: (m.rj||0)+(m.bh||0)+(m.es||0),
-    invest: m.invest||0, recAds: m.recAds||0,
-    isCurrent: false
-  }));
-  list.push({
+  const curKey = normMonthKey(config.mes);
+
+  const cur = {
     mes: config.mes || 'Mês atual',
     rj: rjTotal, bh: bhTotal, es: esTotal,
     total: rjTotal+bhTotal+esTotal,
-    invest: config.rjInvest+config.bhInvest+config.esInvest,
-    recAds: config.rjRecAds+config.bhRecAds+config.esRecAds,
+    invest: (config.rjInvest||0)+(config.bhInvest||0)+(config.esInvest||0),
+    recAds: (config.rjRecAds||0)+(config.bhRecAds||0)+(config.esRecAds||0),
     isCurrent: true
+  };
+
+  const list = [];
+  histMonths.forEach(m=>{
+    // pula qualquer entrada do histórico que seja o mesmo mês atual:
+    // o valor ao vivo é a fonte da verdade.
+    if(curKey && normMonthKey(m.mes) === curKey) return;
+    list.push({
+      mes: m.mes,
+      rj: m.rj||0, bh: m.bh||0, es: m.es||0,
+      total: (m.rj||0)+(m.bh||0)+(m.es||0),
+      invest: m.invest||0, recAds: m.recAds||0,
+      isCurrent: false
+    });
   });
+  list.push(cur);
   return list;
 }
+
+// Mantida por compatibilidade: agora delega para a fonte única.
+function getAllMonthsData(){ return buildUnifiedMonths(); }
 
 // Preenche os 4 selects (2 de faturamento + 2 de ads) preservando seleção
 function updateCompareSelectors(){
@@ -1629,8 +1667,9 @@ function renderCompareResult(){
     return;
   }
   const months = getAllMonthsData();
-  const mb = months.find(m=>m.mes===b);
-  const mt = months.find(m=>m.mes===t);
+  const kb = normMonthKey(b), kt = normMonthKey(t);
+  const mb = months.find(m=>m.mes===b) || months.find(m=>normMonthKey(m.mes)===kb);
+  const mt = months.find(m=>m.mes===t) || months.find(m=>normMonthKey(m.mes)===kt);
   if(!mb || !mt){ grid.classList.add('hidden'); return; }
 
   if(badge){ badge.className='cmp-badge on'; badge.textContent=`${b} vs ${t}`; }
@@ -1660,8 +1699,9 @@ function renderCompareAdsResult(){
     return;
   }
   const months = getAllMonthsData();
-  const mb = months.find(m=>m.mes===b);
-  const mt = months.find(m=>m.mes===t);
+  const kb = normMonthKey(b), kt = normMonthKey(t);
+  const mb = months.find(m=>m.mes===b) || months.find(m=>normMonthKey(m.mes)===kb);
+  const mt = months.find(m=>m.mes===t) || months.find(m=>normMonthKey(m.mes)===kt);
   if(!mb || !mt){ grid.classList.add('hidden'); return; }
 
   if(badge){ badge.className='cmp-badge on'; badge.textContent=`${b} vs ${t}`; }
@@ -1808,6 +1848,15 @@ function saveAll(){
   if(IS_ADMIN){ _dirty = true; updateSaveState(); }
 }
 
+// Remove do histórico qualquer entrada que corresponda ao MÊS ATUAL.
+// O mês atual é sempre calculado ao vivo das linhas diárias; manter uma cópia
+// defasada no histórico (ex.: 98 mil) causava divergência no gráfico/filtro.
+function dropCurrentFromHist(){
+  const curKey = normMonthKey(config.mes);
+  if(!curKey) return;
+  histMonths = (histMonths||[]).filter(m=>normMonthKey(m.mes)!==curKey);
+}
+
 // Carrega o estado do SERVIDOR (fonte da verdade para todos)
 async function loadFromServer(){
   try{
@@ -1819,6 +1868,7 @@ async function loadFromServer(){
       if(data.state.histMonths) histMonths = data.state.histMonths;
     }
   }catch(e){ console.warn('Falha ao carregar do servidor', e); }
+  dropCurrentFromHist();
 }
 
 // Envia o estado atual ao servidor (só admin)
@@ -1859,7 +1909,7 @@ async function consolidateMonth(){
     invest:(config.rjInvest||0)+(config.bhInvest||0)+(config.esInvest||0),
     recAds:(config.rjRecAds||0)+(config.bhRecAds||0)+(config.esRecAds||0)
   };
-  const idx = histMonths.findIndex(m=>m.mes===mes);
+  const idx = histMonths.findIndex(m=>normMonthKey(m.mes)===normMonthKey(mes));
   if(idx>=0) histMonths[idx] = linha; else histMonths.push(linha);
 
   // Snapshot completo do mês (config + linhas diárias)
@@ -2132,7 +2182,7 @@ async function meliSync(){
     const data = await r.json();
     if(!r.ok) throw new Error(data.error||('status '+r.status));
 
-    aplicarDadosMeli(data);    // joga os números na tela
+    aplicarDadosMeli(data, { from, to });    // joga os números na tela + ajusta mês/data
     mostrarResultadoMeli(data);
     if(IS_ADMIN){
       meliRefreshStatus();
@@ -2147,8 +2197,39 @@ async function meliSync(){
   }
 }
 
+// Nomes de mês por extenso (índice 0 = Janeiro)
+const _MESES_EXT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                    'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+// A partir do período sincronizado (from/to em YYYY-MM-DD), ajusta automaticamente
+// o nome do mês, a data "hoje", o total de dias do mês e os dias corridos.
+// Assim o cabeçalho e a meta acompanham o período puxado da API — sem digitar à mão.
+function ajustarPeriodoConfig(from, to){
+  if(!to) return;
+  const [ty, tm, td] = to.split('-').map(Number);
+  if(!ty || !tm) return;
+  // Nome do mês com base no mês final do período
+  config.mes = `${_MESES_EXT[tm-1]} ${ty}`;
+  // "Hoje" = última data do período (dd/mm/aaaa)
+  config.dataHoje = `${String(td).padStart(2,'0')}/${String(tm).padStart(2,'0')}/${ty}`;
+  // Total de dias do mês final
+  config.diasTotaisMes = new Date(ty, tm, 0).getDate();
+  // Dias corridos: se o período começa no mesmo mês, conta do dia inicial até o final;
+  // caso contrário usa o dia final como referência.
+  const [fy, fm, fd] = (from||'').split('-').map(Number);
+  if(fy===ty && fm===tm){
+    config.diasCorridos = td;             // do dia 1 (ou fd) até td no mês corrente
+  } else {
+    config.diasCorridos = td;
+  }
+}
+
 // Converte os dados da API no formato do dashboard (rows diárias por loja)
-function aplicarDadosMeli(data){
+function aplicarDadosMeli(data, periodo){
+  periodo = periodo || {};
+  // Ajusta mês/data/dias conforme o período sincronizado (antes de renderizar)
+  if(periodo.from || periodo.to) ajustarPeriodoConfig(periodo.from, periodo.to);
+
   const lojas = data.lojas || {};
   // junta todos os dias que apareceram em qualquer loja
   const diasSet = new Set();
@@ -2156,7 +2237,12 @@ function aplicarDadosMeli(data){
     const d = lojas[k]; if(d && d.porDia) Object.keys(d.porDia).forEach(dia=>diasSet.add(dia));
   });
   const dias = [...diasSet].sort();   // YYYY-MM-DD crescente
-  if(dias.length === 0) return;
+  if(dias.length === 0){
+    // Sem vendas no período: ainda assim atualiza o cabeçalho/mês e re-renderiza.
+    populateConfigInputs();
+    render();
+    return;
+  }
 
   const semana = ['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
   rows = dias.map(dia=>{
