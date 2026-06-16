@@ -416,7 +416,7 @@
             <th>Var. dia</th>
             <th>Mix</th>
             <th>Acumulado</th>
-            <th>Meta Ac.</th>
+            <th>Meta Dia</th>
             <th>Saldo</th>
             <th>Meta?</th>
             <th></th>
@@ -1116,7 +1116,9 @@ function renderDailyTable(md){
     const total = rowTotal(r);
     acum += total;
     const dn = dayNum(r.data);
-    const metaAcum = md * dn;
+    // Meta Dia = meta fixa diária (igual em todas as linhas)
+    // Saldo = bola de neve: acumulado − (meta diária × dias decorridos)
+    const metaAcum = md * dn;          // usado só para o saldo acumulado
     const saldo = acum - metaAcum;
     const atingiu = total >= md;  // <- REATIVO: compara contra metaDia calculada
     totalRJ+=r.rj||0; totalBH+=r.bh||0; totalES+=r.es||0; totalGeral+=total;
@@ -1139,14 +1141,17 @@ function renderDailyTable(md){
       <td class="var-cell">${varHtml}</td>
       <td>${mix}</td>
       <td>R$ ${fmtBR(acum)}</td>
-      <td style="color:var(--muted)">R$ ${fmtBR(metaAcum)}</td>
+      <td style="color:var(--muted)">R$ ${fmtBR(md)}</td>
       <td class="${saldo>=0?'saldo-pos':'saldo-neg'}">${saldo>=0?'+':'−'}R$ ${fmtBR(Math.abs(saldo))}</td>
       <td class="${atingiu?'sim':'nao'}">${atingiu?'✓ Sim':'✗ Não'}</td>
       <td><button class="del-row-btn" onclick="rows.splice(${i},1);render()">✕</button></td>`;
     tbody.appendChild(tr);
   });
 
-  const saldoFinal = totalGeral - (md * config.diasCorridos);
+  // Saldo final = bola de neve até o último dia lançado (consistente com a última linha)
+  const ultimoDn = rows.length > 0 ? dayNum(rows[rows.length-1].data) : config.diasCorridos;
+  const metaAcumPeriodo = md * ultimoDn;
+  const saldoFinal = totalGeral - metaAcumPeriodo;
   tfoot.innerHTML = `<tr class="tot">
     <td colspan="2">TOTAL</td>
     <td class="rj-col">R$ ${fmtBR(totalRJ)}</td>
@@ -1155,7 +1160,7 @@ function renderDailyTable(md){
     <td class="tot-col">R$ ${fmtBR(totalGeral)}</td>
     <td>—</td><td>—</td>
     <td>R$ ${fmtBR(totalGeral)}</td>
-    <td style="color:var(--muted)">R$ ${fmtBR(md * config.diasCorridos)}</td>
+    <td style="color:var(--muted)" title="Meta acumulada até o último dia lançado">R$ ${fmtBR(metaAcumPeriodo)}</td>
     <td class="${saldoFinal>=0?'saldo-pos':'saldo-neg'}">${saldoFinal>=0?'+':'−'}R$ ${fmtBR(Math.abs(saldoFinal))}</td>
     <td>—</td><td></td>
   </tr>`;
