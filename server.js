@@ -300,18 +300,22 @@ app.post('/api/meli/curva', async (req, res) => {
     }
   }
 
-  // 2) Classificação ABC por faturamento (Pareto acumulado)
+  // 2) Classificação ABC por GIRO (unidades vendidas) via Pareto acumulado.
+  // Para reposição de estoque, o que importa é o quanto o item SAI em quantidade,
+  // não quanto fatura — assim um item de ticket alto que vendeu 1 unidade não
+  // é tratado como prioridade A. A vem antes de B, garantindo que o maior giro
+  // sempre fique em A.
   let lista = Object.values(itensConsolidados);
   const fatTotal = lista.reduce((s,it)=>s+it.faturamento, 0) || 1;
-  lista.sort((a,b)=> b.faturamento - a.faturamento);
+  const unidTotal = lista.reduce((s,it)=>s+(it.unidades||0), 0) || 1;
+  lista.sort((a,b)=> (b.unidades||0) - (a.unidades||0));
   let acumulado = 0;
   for (const it of lista) {
-    const pctAntes = acumulado / fatTotal;   // % acumulado ANTES deste item
-    acumulado += it.faturamento;
-    // Classifica pela posição de entrada: o item que começa abaixo de 80% é A,
-    // garantindo que o(s) maior(es) vendedor(es) sempre fiquem em A.
+    const pctAntes = acumulado / unidTotal;   // % de unidades acumulado ANTES deste item
+    acumulado += (it.unidades || 0);
     it.curva = pctAntes < 0.80 ? 'A' : (pctAntes < 0.95 ? 'B' : 'C');
-    it.pctFaturamento = it.faturamento / fatTotal;
+    it.pctFaturamento = it.faturamento / fatTotal;   // mantido só para exibição
+    it.pctUnidades = (it.unidades || 0) / unidTotal; // participação no giro
     it.vendaMediaDia = (it.unidades || 0) / dias;       // unidades/dia
     it.fatMediaDia = (it.faturamento || 0) / dias;      // R$/dia
     // Cobertura: dias até o estoque zerar no ritmo de venda atual.
@@ -334,18 +338,18 @@ app.post('/api/meli/curva', async (req, res) => {
   const curvaAsemEstoque = lista
     .filter(it => (it.curva === 'A' || it.curva === 'B') && it.estoqueConhecido && it.estoque <= 0)
     .sort((a,b)=> {
-      // A vem antes de B; dentro da mesma curva, quem mais fatura/dia primeiro
+      // A vem antes de B; dentro da mesma curva, quem mais vende/dia (giro) primeiro
       if (a.curva !== b.curva) return a.curva === 'A' ? -1 : 1;
-      return b.fatMediaDia - a.fatMediaDia;
+      return b.vendaMediaDia - a.vendaMediaDia;
     });
 
   // 3b) Itens ZERANDO: Curva A ou B, com estoque > 0 e cobertura <= 15 dias.
-  // Ordena por urgência: menor cobertura primeiro; empate, quem mais fatura/dia.
+  // Ordena por urgência: menor cobertura primeiro; empate, quem mais vende/dia.
   const itensZerando = lista
     .filter(it => (it.curva === 'A' || it.curva === 'B')
                 && it.estoqueConhecido && it.estoque > 0
                 && it.coberturaDias != null && it.coberturaDias <= 15)
-    .sort((a,b)=> (a.coberturaDias - b.coberturaDias) || (b.fatMediaDia - a.fatMediaDia));
+    .sort((a,b)=> (a.coberturaDias - b.coberturaDias) || (b.vendaMediaDia - a.vendaMediaDia));
 
   DB.meli_curva_last = new Date().toISOString();
   await saveDB(DB);
