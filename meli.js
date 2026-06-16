@@ -147,7 +147,7 @@ async function fetchLojaData({ token, userId, desde, ate }) {
     }
     if (results.length === 0) break;
     offset += limit;
-    if (offset > 5000) break; // trava de segurança
+    if (offset > 50000) break; // trava de segurança (suporta períodos longos / muitos meses)
   }
 
   // ── 4b. REPUTAÇÃO / NÍVEL via /users/{id} ──
