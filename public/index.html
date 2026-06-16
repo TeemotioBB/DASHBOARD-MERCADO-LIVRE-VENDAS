@@ -285,7 +285,7 @@
 <div class="toolbar">
   <div class="toolbar-left">
     <div class="meli-badge">MELI</div>
-    <h1>Acompanhamento de Vendas 📊<span>— <span id="headerMes">Maio 2026</span></span></h1>
+    <h1>Acompanhamento de Vendas <span>— <span id="headerMes">Maio 2026</span></span></h1>
   </div>
   <div class="toolbar-right">
     <span id="modeBadge" class="mode-badge readonly">👁 Somente leitura</span>
@@ -303,6 +303,7 @@
   <div class="tab" onclick="switchTab('diario', this)">📅 Dia a Dia</div>
   <div class="tab" onclick="switchTab('ads', this)">🎯 Ads & Operacional</div>
   <div class="tab" onclick="switchTab('crescimento', this)">📈 Crescimento</div>
+  <div class="tab" onclick="switchTab('curva', this)">📦 Curva A s/ Estoque</div>
   <div class="tab" onclick="switchTab('integracao', this)">🔌 Integração ML</div>
   <div class="tab" onclick="switchTab('config', this)">⚙️ Configurações</div>
 </div>
@@ -518,6 +519,76 @@
     <div style="overflow-x:auto">
       <table class="month-table" id="histTable"></table>
     </div>
+  </div>
+
+</div>
+
+<!-- ══ TAB: CURVA A SEM ESTOQUE ══ -->
+<div class="tab-panel" id="tab-curva">
+
+  <div style="background:rgba(255,77,79,0.06);border:1px solid rgba(255,77,79,0.25);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--text)">
+    📦 <strong>Curva A e B sem estoque.</strong> Lista os itens que mais faturam (a Curva A representa ~80% do faturamento; a Curva B, os ~15% seguintes) e que estão com <b>estoque zerado</b>. São as prioridades de compra: produtos que vendem e a empresa não tem para vender. Calculado sobre os últimos <b id="curvaDiasLabel">90</b> dias das 3 lojas.
+  </div>
+
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+    <button class="srv-btn primary" id="btnCurva" onclick="atualizarCurva()">🔄 Atualizar curva</button>
+    <label style="font-size:12px;color:var(--muted)">Período:
+      <select id="curvaDias" class="cfg-input" style="width:auto;display:inline-block;margin-left:4px" onchange="document.getElementById('curvaDiasLabel').innerText=this.value">
+        <option value="60">60 dias</option>
+        <option value="90" selected>90 dias</option>
+        <option value="120">120 dias</option>
+      </select>
+    </label>
+    <span id="curvaStatus" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+
+  <div id="curvaResumo" class="chart-kpis"></div>
+
+  <div class="section">
+    <div class="section-title"><div class="left"><div class="dot" style="background:var(--rj)"></div>Itens Curva A e B — Estoque Zerado (prioridade de compra)</div></div>
+    <div style="overflow-x:auto">
+      <table class="month-table" id="curvaTable">
+        <thead>
+          <tr>
+            <th>#</th><th>Produto</th><th>SKU</th>
+            <th>Curva</th><th>Faturam. 90d</th><th>% do total</th>
+            <th>Unid. vendidas</th><th>Venda média/dia</th>
+            <th>R$/dia perdido</th><th>Lojas</th>
+          </tr>
+        </thead>
+        <tbody id="curvaBody">
+          <tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px">
+            Clique em <b>🔄 Atualizar curva</b> para carregar. Pode levar alguns segundos (consulta cada loja na API do Mercado Livre).
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title"><div class="left"><div class="dot" style="background:var(--yellow)"></div>Itens Zerando — Comprar Antes de Acabar (Curva A e B)</div></div>
+    <div style="font-size:11px;color:var(--muted);margin:-4px 0 10px 2px">
+      <span style="color:#ff4d4f">●</span> Crítico: zera em ≤7 dias &nbsp;·&nbsp;
+      <span style="color:#ffb020">●</span> Atenção: zera em ≤15 dias
+    </div>
+    <div style="overflow-x:auto">
+      <table class="month-table" id="zerandoTable">
+        <thead>
+          <tr>
+            <th>Status</th><th>Produto</th><th>SKU</th>
+            <th>Curva</th><th>Estoque</th><th>Venda média/dia</th>
+            <th>Dias até zerar</th><th>R$/dia em risco</th><th>Lojas</th>
+          </tr>
+        </thead>
+        <tbody id="zerandoBody">
+          <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+    <button class="srv-btn" id="btnCurvaCsv" onclick="exportarCurvaCsv()" style="display:none">⬇️ Exportar CSV</button>
   </div>
 
 </div>
@@ -1836,6 +1907,145 @@ function renderGrowthTabFromState(){
   const pt=prevTotal();
   const crescTotal=pctChange(totalRealizado,pt);
   renderGrowthTab(rjTotal,bhTotal,esTotal,totalRealizado,crescTotal);
+}
+
+// ══════════════════════════════════════════════
+// Curva A sem estoque
+// ══════════════════════════════════════════════
+let _curvaDados = null;   // guarda o último resultado para exportar
+
+async function atualizarCurva(){
+  const btn = document.getElementById('btnCurva');
+  const status = document.getElementById('curvaStatus');
+  const dias = parseInt(document.getElementById('curvaDias').value) || 90;
+  btn.disabled = true; btn.textContent = '⏳ Consultando lojas...';
+  status.textContent = 'Isso pode levar até 1-2 minutos com muitos itens.';
+  try{
+    const r = await fetch('/api/meli/curva', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ dias })
+    });
+    const data = await r.json();
+    if(!r.ok || !data.ok) throw new Error(data.error || 'falha');
+    _curvaDados = data;
+    renderCurva(data);
+    const errLojas = Object.keys(data.erros||{});
+    status.textContent = `✓ Atualizado agora · ${data.totalItens} itens analisados`
+      + (errLojas.length ? ` · ⚠️ lojas com erro: ${errLojas.join(', ')}` : '');
+  }catch(e){
+    status.textContent = '✗ Erro: ' + e.message;
+  }finally{
+    btn.disabled = false; btn.textContent = '🔄 Atualizar curva';
+  }
+}
+
+function renderCurva(data){
+  const body = document.getElementById('curvaBody');
+  const itens = data.curvaAsemEstoque || [];
+  const csvBtn = document.getElementById('btnCurvaCsv');
+
+  const resumo = document.getElementById('curvaResumo');
+  const totalPerdaDia = itens.reduce((s,it)=>s+(it.fatMediaDia||0),0);
+  const zerando = data.itensZerando || [];
+  const nCriticos = zerando.filter(it=>it.coberturaDias<=7).length;
+  resumo.innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">Itens A/B zerados</div><div class="kpi-value">${itens.length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Receita/dia parada</div><div class="kpi-value" style="color:var(--rj)">R$ ${fmtBR(totalPerdaDia)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Zerando (A+B)</div><div class="kpi-value" style="color:#ffb020">${zerando.length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Críticos (≤7 dias)</div><div class="kpi-value" style="color:var(--rj)">${nCriticos}</div></div>
+  `;
+
+  renderZerando(zerando);
+
+  if(itens.length === 0){
+    body.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--green);padding:30px">
+      ✓ Nenhum item Curva A ou B está zerado. Estoque das prioridades em dia!</td></tr>`;
+  } else {
+    const lojaLabels = { rj:'RJ', bh:'BH', es:'ES' };
+    const curvaBg = { A:'var(--rj)', B:'#ffb020' };
+    body.innerHTML = itens.map((it,i)=>{
+      const lojas = Object.keys(it.porLoja||{}).map(k=>lojaLabels[k]||k).join(', ');
+      const cor = curvaBg[it.curva] || 'var(--muted)';
+      return `<tr>
+        <td>${i+1}</td>
+        <td style="max-width:280px;white-space:normal">${escapeHtml(it.title||'—')}</td>
+        <td>${escapeHtml(it.sku||'—')}</td>
+        <td><span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600">${it.curva}</span></td>
+        <td>R$ ${fmtBR(it.faturamento)}</td>
+        <td>${(it.pctFaturamento*100).toFixed(1)}%</td>
+        <td>${it.unidades}</td>
+        <td>${(it.vendaMediaDia||0).toFixed(2)}</td>
+        <td style="color:${cor};font-weight:600">R$ ${fmtBR(it.fatMediaDia||0)}</td>
+        <td>${lojas}</td>
+      </tr>`;
+    }).join('');
+  }
+  // botão de export aparece se houver qualquer item acionável
+  csvBtn.style.display = (itens.length || (data.itensZerando||[]).length) ? '' : 'none';
+}
+
+function renderZerando(itens){
+  const body = document.getElementById('zerandoBody');
+  if(!itens || itens.length === 0){
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--green);padding:20px">
+      ✓ Nenhum item A/B prestes a zerar nos próximos 15 dias.</td></tr>`;
+    return;
+  }
+  const lojaLabels = { rj:'RJ', bh:'BH', es:'ES' };
+  const curvaBg = { A:'var(--rj)', B:'#ffb020' };
+  body.innerHTML = itens.map(it=>{
+    const critico = it.coberturaDias <= 7;
+    const cor = critico ? '#ff4d4f' : '#ffb020';
+    const selo = critico ? '🔴 Crítico' : '🟡 Atenção';
+    const dias = isFinite(it.coberturaDias) ? Math.floor(it.coberturaDias) : '∞';
+    const lojas = Object.keys(it.porLoja||{}).map(k=>lojaLabels[k]||k).join(', ');
+    return `<tr>
+      <td><span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap">${selo}</span></td>
+      <td style="max-width:260px;white-space:normal">${escapeHtml(it.title||'—')}</td>
+      <td>${escapeHtml(it.sku||'—')}</td>
+      <td><span style="background:${curvaBg[it.curva]||'var(--muted)'};color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600">${it.curva}</span></td>
+      <td>${it.estoque}</td>
+      <td>${(it.vendaMediaDia||0).toFixed(2)}</td>
+      <td style="color:${cor};font-weight:700">${dias} dias</td>
+      <td>R$ ${fmtBR(it.fatMediaDia||0)}</td>
+      <td>${lojas}</td>
+    </tr>`;
+  }).join('');
+}
+
+
+function exportarCurvaCsv(){
+  if(!_curvaDados) return;
+  const semEstoque = _curvaDados.curvaAsemEstoque || [];
+  const zerando = _curvaDados.itensZerando || [];
+  const head = ['Status','Produto','SKU','Curva','Estoque','Faturamento','% do total','Unidades vendidas','Venda media/dia','Dias ate zerar','R$/dia em risco','Lojas'];
+  const linhaDe = (it, status, dias) => [
+    status,
+    `"${(it.title||'').replace(/"/g,'""')}"`,
+    `"${(it.sku||'').replace(/"/g,'""')}"`,
+    it.curva||'',
+    (it.estoque!=null?it.estoque:''),
+    (it.faturamento||0).toFixed(2),
+    (it.pctFaturamento*100||0).toFixed(1)+'%',
+    it.unidades||0,
+    (it.vendaMediaDia||0).toFixed(2),
+    dias,
+    (it.fatMediaDia||0).toFixed(2),
+    `"${Object.keys(it.porLoja||{}).join(', ')}"`,
+  ].join(',');
+  const linhas = [
+    ...semEstoque.map(it=>linhaDe(it,'ZERADO',0)),
+    ...zerando.map(it=>linhaDe(it, it.coberturaDias<=7?'CRITICO':'ATENCAO', isFinite(it.coberturaDias)?Math.floor(it.coberturaDias):'')),
+  ];
+  if(linhas.length === 0){ alert('Nada para exportar.'); return; }
+  const csv = [head.join(','), ...linhas].join('\n');
+  const blob = new Blob(['\ufeff'+csv], { type:'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `curva-compras-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ════════════════════════════════════════
