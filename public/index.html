@@ -527,7 +527,7 @@
 <div class="tab-panel" id="tab-curva">
 
   <div style="background:rgba(255,77,79,0.06);border:1px solid rgba(255,77,79,0.25);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--text)">
-    📦 <strong>Curva A e B sem estoque.</strong> Lista os itens que mais faturam (a Curva A representa ~80% do faturamento; a Curva B, os ~15% seguintes) e que estão com <b>estoque zerado</b>. São as prioridades de compra: produtos que vendem e a empresa não tem para vender. Calculado sobre os últimos <b id="curvaDiasLabel">90</b> dias das 3 lojas.
+    📦 <strong>Curva A e B sem estoque.</strong> Classifica os itens por <b>giro</b> (quantidade vendida nos últimos <b id="curvaDiasLabel">90</b> dias): a Curva A são os que respondem por ~80% das unidades vendidas; a Curva B, os ~15% seguintes. Lista aqui os que estão com <b>estoque zerado</b> — as prioridades de compra, ou seja, o que mais sai e a empresa não tem para vender. Considera as 3 lojas.
   </div>
 
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
@@ -551,7 +551,7 @@
         <thead>
           <tr>
             <th>#</th><th>Produto</th><th>SKU</th>
-            <th>Curva</th><th>Faturam. 90d</th><th>% do total</th>
+            <th>Curva</th><th>Faturam. 90d</th><th>% do giro</th>
             <th>Unid. vendidas</th><th>Venda média/dia</th>
             <th>R$/dia perdido</th><th>Lojas</th>
           </tr>
@@ -1980,7 +1980,7 @@ function renderCurva(data){
         <td>${escapeHtml(it.sku||'—')}</td>
         <td><span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600">${it.curva}</span></td>
         <td>R$ ${fmtBR(it.faturamento)}</td>
-        <td>${(it.pctFaturamento*100).toFixed(1)}%</td>
+        <td>${((it.pctUnidades||0)*100).toFixed(1)}%</td>
         <td>${it.unidades}</td>
         <td>${(it.vendaMediaDia||0).toFixed(2)}</td>
         <td style="color:${cor};font-weight:600">R$ ${fmtBR(it.fatMediaDia||0)}</td>
@@ -2026,7 +2026,7 @@ function exportarCurvaCsv(){
   if(!_curvaDados) return;
   const semEstoque = _curvaDados.curvaAsemEstoque || [];
   const zerando = _curvaDados.itensZerando || [];
-  const head = ['Status','Produto','SKU','Curva','Estoque','Faturamento','% do total','Unidades vendidas','Venda media/dia','Dias ate zerar','R$/dia em risco','Lojas'];
+  const head = ['Status','Produto','SKU','Curva','Estoque','Faturamento','% do giro','Unidades vendidas','Venda media/dia','Dias ate zerar','R$/dia em risco','Lojas'];
   const linhaDe = (it, status, dias) => [
     status,
     `"${(it.title||'').replace(/"/g,'""')}"`,
@@ -2034,7 +2034,7 @@ function exportarCurvaCsv(){
     it.curva||'',
     (it.estoque!=null?it.estoque:''),
     (it.faturamento||0).toFixed(2),
-    (it.pctFaturamento*100||0).toFixed(1)+'%',
+    ((it.pctUnidades||0)*100).toFixed(1)+'%',
     it.unidades||0,
     (it.vendaMediaDia||0).toFixed(2),
     dias,
