@@ -247,6 +247,121 @@ app.post('/api/meli/sync', async (req, res) => {
   res.json({ ok: true, last_sync: DB.meli_last_sync, ...resultado });
 });
 
+// Curva ABC + itens sem estoque. Busca 90 dias (ou período enviado) das 3 lojas,
+// consolida por item, classifica A/B/C por faturamento (Pareto) e devolve os itens.
+// LIBERADO para visitantes (só lê da API). É pesado: usar sob demanda (botão).
+// Body opcional: { dias: 90 }
+app.post('/api/meli/curva', async (req, res) => {
+  if (!mlConfigured()) return res.status(400).json({ error: 'Integração não configurada' });
+  const dias = Math.min(Math.max(parseInt((req.body && req.body.dias) || 90, 10) || 90, 7), 365);
+
+  // período: hoje - dias  até  agora (fuso de Brasília)
+  const fmt = (d) => {
+    const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${day}`;
+  };
+  const hoje = new Date();
+  const ini = new Date(hoje.getTime() - dias*24*60*60*1000);
+  const desde = `${fmt(ini)}T00:00:00.000-03:00`;
+  const ate   = `${fmt(hoje)}T23:59:59.000-03:00`;
+
+  // 1) Coleta os itens de cada loja
+  const erros = {};
+  const itensConsolidados = {};  // id -> item consolidado entre lojas
+  for (const l of meli.LOJAS) {
+    const store = DB.tokens[l.key];
+    if (!store || !store.refresh_token) { erros[l.key] = 'não conectada'; continue; }
+    try {
+      const { token, updatedStore } = await meli.ensureValidToken(store, { clientId: ML_CLIENT_ID, clientSecret: ML_CLIENT_SECRET });
+      if (updatedStore) { DB.tokens[l.key] = updatedStore; await saveDB(DB); }
+      const { itens } = await meli.fetchCurvaABC({ token, userId: DB.tokens[l.key].user_id, desde, ate });
+      for (const it of itens) {
+        // chave: SKU (se houver) senão o id do anúncio; agrupa entre lojas
+        const chave = it.sku ? `sku:${it.sku}` : `id:${it.id}`;
+        if (!itensConsolidados[chave]) {
+          itensConsolidados[chave] = {
+            chave, sku: it.sku, title: it.title,
+            unidades: 0, faturamento: 0,
+            estoque: 0, estoqueConhecido: false,
+            porLoja: {},
+          };
+        }
+        const c = itensConsolidados[chave];
+        c.unidades += it.unidades || 0;
+        c.faturamento += it.faturamento || 0;
+        if (it.estoque != null) { c.estoque += it.estoque; c.estoqueConhecido = true; }
+        c.porLoja[l.key] = {
+          unidades: it.unidades||0, faturamento: it.faturamento||0,
+          estoque: (it.estoque!=null)?it.estoque:null, id: it.id, status: it.status||null,
+        };
+      }
+    } catch (e) {
+      erros[l.key] = e.message;
+    }
+  }
+
+  // 2) Classificação ABC por faturamento (Pareto acumulado)
+  let lista = Object.values(itensConsolidados);
+  const fatTotal = lista.reduce((s,it)=>s+it.faturamento, 0) || 1;
+  lista.sort((a,b)=> b.faturamento - a.faturamento);
+  let acumulado = 0;
+  for (const it of lista) {
+    const pctAntes = acumulado / fatTotal;   // % acumulado ANTES deste item
+    acumulado += it.faturamento;
+    // Classifica pela posição de entrada: o item que começa abaixo de 80% é A,
+    // garantindo que o(s) maior(es) vendedor(es) sempre fiquem em A.
+    it.curva = pctAntes < 0.80 ? 'A' : (pctAntes < 0.95 ? 'B' : 'C');
+    it.pctFaturamento = it.faturamento / fatTotal;
+    it.vendaMediaDia = (it.unidades || 0) / dias;       // unidades/dia
+    it.fatMediaDia = (it.faturamento || 0) / dias;      // R$/dia
+    // Cobertura: dias até o estoque zerar no ritmo de venda atual.
+    // null = sem estoque conhecido; Infinity = vende 0/dia (não zera).
+    if (!it.estoqueConhecido) {
+      it.coberturaDias = null;
+    } else if (it.vendaMediaDia > 0) {
+      it.coberturaDias = it.estoque / it.vendaMediaDia;
+    } else {
+      it.coberturaDias = Infinity;   // tem estoque mas não vende → não zera
+    }
+    // Classificação do alerta de cobertura
+    if (it.estoqueConhecido && it.estoque <= 0) it.alerta = 'zerado';
+    else if (it.coberturaDias != null && it.coberturaDias <= 7) it.alerta = 'critico';
+    else if (it.coberturaDias != null && it.coberturaDias <= 15) it.alerta = 'atencao';
+    else it.alerta = 'ok';
+  }
+
+  // 3) Subconjunto: Curva A e B SEM estoque (ou estoque zero)
+  const curvaAsemEstoque = lista
+    .filter(it => (it.curva === 'A' || it.curva === 'B') && it.estoqueConhecido && it.estoque <= 0)
+    .sort((a,b)=> {
+      // A vem antes de B; dentro da mesma curva, quem mais fatura/dia primeiro
+      if (a.curva !== b.curva) return a.curva === 'A' ? -1 : 1;
+      return b.fatMediaDia - a.fatMediaDia;
+    });
+
+  // 3b) Itens ZERANDO: Curva A ou B, com estoque > 0 e cobertura <= 15 dias.
+  // Ordena por urgência: menor cobertura primeiro; empate, quem mais fatura/dia.
+  const itensZerando = lista
+    .filter(it => (it.curva === 'A' || it.curva === 'B')
+                && it.estoqueConhecido && it.estoque > 0
+                && it.coberturaDias != null && it.coberturaDias <= 15)
+    .sort((a,b)=> (a.coberturaDias - b.coberturaDias) || (b.fatMediaDia - a.fatMediaDia));
+
+  DB.meli_curva_last = new Date().toISOString();
+  await saveDB(DB);
+
+  res.json({
+    ok: true,
+    periodo: { desde, ate, dias },
+    last_curva: DB.meli_curva_last,
+    totalItens: lista.length,
+    faturamentoTotal: fatTotal,
+    curvaAsemEstoque,
+    itensZerando,
+    erros,
+  });
+});
+
 // ──────────────────────────────────────────────
 // Arquivos estáticos
 // ──────────────────────────────────────────────
