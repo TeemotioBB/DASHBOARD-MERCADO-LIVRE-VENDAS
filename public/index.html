@@ -527,7 +527,7 @@
 <div class="tab-panel" id="tab-curva">
 
   <div style="background:rgba(255,77,79,0.06);border:1px solid rgba(255,77,79,0.25);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--text)">
-    📦 <strong>Curva A e B sem estoque.</strong> Classifica os itens por <b>giro</b> (quantidade vendida nos últimos <b id="curvaDiasLabel">90</b> dias): a Curva A são os que respondem por ~80% das unidades vendidas; a Curva B, os ~15% seguintes. Lista aqui os que estão com <b>estoque zerado</b> — as prioridades de compra, ou seja, o que mais sai e a empresa não tem para vender. Considera as 3 lojas.
+    📦 <strong>Curva A e B sem estoque.</strong> Classifica os itens de forma <b>híbrida</b> (últimos <b id="curvaDiasLabel">90</b> dias): um item é Curva A se for relevante em <b>giro</b> (quantidade vendida) <b>ou</b> em <b>faturamento</b> — assim entram tanto os que mais saem quanto os de maior receita, mesmo vendendo pouco (o 💰 indica que entrou pela receita). Lista aqui os que estão com <b>estoque zerado</b> em alguma loja. Considera as 3 lojas.
   </div>
 
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
@@ -1987,7 +1987,7 @@ function renderCurva(data){
         <td>${i+1}</td>
         <td style="max-width:260px;white-space:normal">${escapeHtml(it.title||'—')}</td>
         <td>${escapeHtml(it.sku||'—')}</td>
-        <td><span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600">${it.curva}</span></td>
+        <td><span title="Classificado por: ${it.motivoCurva||'—'}" style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;cursor:help">${it.curva}</span>${it.motivoCurva==='receita' ? ' <span title="É curva A pela receita, não pelo giro" style="font-size:10px;color:var(--muted)">💰</span>' : ''}</td>
         <td>R$ ${fmtBR(it.faturamento)}</td>
         <td>${((it.pctUnidades||0)*100).toFixed(1)}%</td>
         <td>${it.unidades}</td>
