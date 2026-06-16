@@ -1914,6 +1914,13 @@ function renderGrowthTabFromState(){
 // ══════════════════════════════════════════════
 let _curvaDados = null;   // guarda o último resultado para exportar
 
+// Escapa texto para inserir com segurança no HTML (títulos/SKU vindos da API)
+function escapeHtml(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 async function atualizarCurva(){
   const btn = document.getElementById('btnCurva');
   const status = document.getElementById('curvaStatus');
