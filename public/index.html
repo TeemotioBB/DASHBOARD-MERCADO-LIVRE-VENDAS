@@ -1550,7 +1550,9 @@ function buildUnifiedMonths(){
       isCurrent: false
     });
   });
-  list.push(cur);
+  // Ordena os meses históricos cronologicamente (Set/25 → … → Mai/26)
+  list.sort((a,b)=> normMonthOrder(a.mes) - normMonthOrder(b.mes));
+  list.push(cur);   // mês atual sempre por último
   return list;
 }
 
@@ -2241,6 +2243,33 @@ function normMonthOrder(nome){
 }
 
 // Converte os dados da API no formato do dashboard.
+// Promove o MÊS ATUAL que está na tela (rows + config) para uma linha no
+// histórico, ANTES de sincronizar um mês diferente. Evita perder o mês passado:
+// quando "maio" deixa de ser o mês ao vivo (porque chegou junho), ele é arquivado.
+function promoverMesAtualParaHist(){
+  const curKey = normMonthKey(config.mes);
+  if(!curKey) return;
+  const rj = rows.reduce((s,r)=>s+(r.rj||0),0);
+  const bh = rows.reduce((s,r)=>s+(r.bh||0),0);
+  const es = rows.reduce((s,r)=>s+(r.es||0),0);
+  if(rj+bh+es <= 0) return;   // nada a arquivar (mês vazio)
+  // Rótulo curto consistente (ex: 'Mai/26') derivado da data de hoje, se houver
+  let rotulo = config.mes;
+  if(config.dataHoje && /\d{2}\/\d{2}\/\d{4}/.test(config.dataHoje)){
+    const [, mm, yy] = config.dataHoje.split('/');
+    rotulo = rotuloMesCurto(`${yy}-${mm}`);
+  }
+  const linha = {
+    mes: rotulo,
+    rj:+rj.toFixed(2), bh:+bh.toFixed(2), es:+es.toFixed(2),
+    invest:(config.rjInvest||0)+(config.bhInvest||0)+(config.esInvest||0),
+    recAds:(config.rjRecAds||0)+(config.bhRecAds||0)+(config.esRecAds||0),
+  };
+  histMonths = histMonths || [];
+  const idx = histMonths.findIndex(m=>normMonthKey(m.mes)===curKey);
+  if(idx>=0) histMonths[idx] = linha; else histMonths.push(linha);
+}
+
 // IMPORTANTE: se o período sincronizado abranger VÁRIOS meses, cada mês vira
 // uma LINHA no histórico (histMonths). O mês mais recente vira o "mês atual"
 // (com as linhas diárias detalhadas). Assim, puxar 01/01/2025→16/06/2026 cria
@@ -2278,6 +2307,13 @@ function aplicarDadosMeli(data, periodo){
 
   const mesesOrdenados = Object.keys(porMes).sort();             // crescente
   const mesAtualYM = mesesOrdenados[mesesOrdenados.length - 1];  // o mais recente
+
+  // Se o mês ao vivo na tela for DIFERENTE do que está chegando, arquiva-o
+  // primeiro (ex.: maio estava ao vivo, agora chega junho → maio vira linha).
+  const novoMesKey = normMonthKey(rotuloMesCurto(mesAtualYM));
+  if(normMonthKey(config.mes) && normMonthKey(config.mes) !== novoMesKey){
+    promoverMesAtualParaHist();
+  }
 
   // ── Meses ANTERIORES ao atual → viram linhas no histórico ──
   histMonths = histMonths || [];
