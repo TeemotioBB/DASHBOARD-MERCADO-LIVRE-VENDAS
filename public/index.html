@@ -2224,41 +2224,100 @@ function ajustarPeriodoConfig(from, to){
   }
 }
 
-// Converte os dados da API no formato do dashboard (rows diárias por loja)
+// Rótulo curto de mês (ex: '2026-05' -> 'Mai/26'), formato usado no histórico
+const _MESES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+function rotuloMesCurto(ym){            // ym = 'YYYY-MM'
+  const [y,m] = ym.split('-').map(Number);
+  return `${_MESES_ABREV[m-1]}/${String(y).slice(2)}`;
+}
+
+// Ordena rótulos de mês ('Mai/26', 'Junho 2026', etc.) cronologicamente
+function normMonthOrder(nome){
+  const k = normMonthKey(nome);                 // ex: 'mai26'
+  const meses = {jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12};
+  const mes = meses[k.slice(0,3)] || 0;
+  const ano = parseInt(k.slice(3)) || 0;
+  return ano*100 + mes;
+}
+
+// Converte os dados da API no formato do dashboard.
+// IMPORTANTE: se o período sincronizado abranger VÁRIOS meses, cada mês vira
+// uma LINHA no histórico (histMonths). O mês mais recente vira o "mês atual"
+// (com as linhas diárias detalhadas). Assim, puxar 01/01/2025→16/06/2026 cria
+// uma linha por mês — sem empilhar tudo num só.
 function aplicarDadosMeli(data, periodo){
   periodo = periodo || {};
-  // Ajusta mês/data/dias conforme o período sincronizado (antes de renderizar)
-  if(periodo.from || periodo.to) ajustarPeriodoConfig(periodo.from, periodo.to);
-
   const lojas = data.lojas || {};
-  // junta todos os dias que apareceram em qualquer loja
+
+  // Junta todos os dias que apareceram em qualquer loja
   const diasSet = new Set();
   ['rj','bh','es'].forEach(k=>{
     const d = lojas[k]; if(d && d.porDia) Object.keys(d.porDia).forEach(dia=>diasSet.add(dia));
   });
   const dias = [...diasSet].sort();   // YYYY-MM-DD crescente
+
   if(dias.length === 0){
-    // Sem vendas no período: ainda assim atualiza o cabeçalho/mês e re-renderiza.
+    // Sem vendas no período: ainda assim ajusta o cabeçalho e re-renderiza.
+    if(periodo.from || periodo.to) ajustarPeriodoConfig(periodo.from, periodo.to);
     populateConfigInputs();
     render();
     return;
   }
 
-  const semana = ['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
-  rows = dias.map(dia=>{
-    const [y,m,d] = dia.split('-');
-    const dataBR = `${d}/${m}/${y}`;
-    const dt = new Date(+y, +m-1, +d);
-    return {
-      data: dataBR,
-      dia: semana[dt.getDay()],
-      rj: (lojas.rj && lojas.rj.porDia[dia]) || 0,
-      bh: (lojas.bh && lojas.bh.porDia[dia]) || 0,
-      es: (lojas.es && lojas.es.porDia[dia]) || 0,
-    };
+  // ── Agrupa os dias por mês (YYYY-MM) ──
+  const porMes = {};   // { '2026-05': { dias:[...], rj, bh, es }, ... }
+  dias.forEach(dia=>{
+    const ym = dia.slice(0,7);            // 'YYYY-MM'
+    if(!porMes[ym]) porMes[ym] = { dias:[], rj:0, bh:0, es:0 };
+    const rj = (lojas.rj && lojas.rj.porDia[dia]) || 0;
+    const bh = (lojas.bh && lojas.bh.porDia[dia]) || 0;
+    const es = (lojas.es && lojas.es.porDia[dia]) || 0;
+    porMes[ym].dias.push({ dia, rj, bh, es });
+    porMes[ym].rj += rj; porMes[ym].bh += bh; porMes[ym].es += es;
   });
 
-  // anúncios ativos e reputação, se vieram
+  const mesesOrdenados = Object.keys(porMes).sort();             // crescente
+  const mesAtualYM = mesesOrdenados[mesesOrdenados.length - 1];  // o mais recente
+
+  // ── Meses ANTERIORES ao atual → viram linhas no histórico ──
+  histMonths = histMonths || [];
+  mesesOrdenados.slice(0, -1).forEach(ym=>{
+    const g = porMes[ym];
+    const linha = {
+      mes: rotuloMesCurto(ym),
+      rj: +g.rj.toFixed(2), bh: +g.bh.toFixed(2), es: +g.es.toFixed(2),
+      invest: 0, recAds: 0,    // Ads não vêm por mês na API; ficam editáveis na config
+    };
+    const k = normMonthKey(linha.mes);
+    const idx = histMonths.findIndex(m=>normMonthKey(m.mes)===k);
+    if(idx>=0){
+      // preserva invest/recAds já cadastrados manualmente para esse mês
+      linha.invest = histMonths[idx].invest || 0;
+      linha.recAds = histMonths[idx].recAds || 0;
+      histMonths[idx] = linha;
+    } else {
+      histMonths.push(linha);
+    }
+  });
+  // Ordena o histórico cronologicamente
+  histMonths.sort((a,b)=> normMonthOrder(a.mes) - normMonthOrder(b.mes));
+
+  // ── MÊS ATUAL (mais recente) → linhas diárias detalhadas ──
+  const semana = ['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
+  rows = porMes[mesAtualYM].dias.map(({dia,rj,bh,es})=>{
+    const [y,m,d] = dia.split('-');
+    const dt = new Date(+y, +m-1, +d);
+    return { data:`${d}/${m}/${y}`, dia:semana[dt.getDay()], rj, bh, es };
+  });
+
+  // Ajusta cabeçalho/mês/dias com base no mês atual detectado nos dados
+  const ultimoDia = porMes[mesAtualYM].dias[porMes[mesAtualYM].dias.length-1].dia;
+  ajustarPeriodoConfig(`${mesAtualYM}-01`, ultimoDia);
+
+  // Garante que o mês atual não fique duplicado no histórico
+  dropCurrentFromHist();
+
+  // Anúncios ativos, se vieram
   const setAnuncios = (k,campoAtivos)=>{
     const d = lojas[k];
     if(d && d.anunciosAtivos!=null) config[campoAtivos] = d.anunciosAtivos;
