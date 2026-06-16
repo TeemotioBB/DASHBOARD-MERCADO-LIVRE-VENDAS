@@ -1921,6 +1921,31 @@ function escapeHtml(s){
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// Formata um ISO em data/hora local legível (ex: 16/06/2026 14:30)
+function fmtDataHora(iso){
+  if(!iso) return '';
+  try{
+    const d = new Date(iso);
+    const p = n=>String(n).padStart(2,'0');
+    return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }catch(e){ return ''; }
+}
+
+// Carrega o último resultado de curva salvo no servidor (ao abrir o site).
+// Mostra os dados sem precisar recalcular; indica quando foram atualizados.
+async function carregarCurvaSalva(){
+  try{
+    const r = await fetch('/api/meli/curva');   // GET
+    const data = await r.json();
+    if(data && data.ok && !data.vazio && data.curvaAsemEstoque){
+      _curvaDados = data;
+      renderCurva(data);
+      const status = document.getElementById('curvaStatus');
+      if(status) status.textContent = `Dados de ${fmtDataHora(data.last_curva)} · ${data.totalItens} itens · clique em Atualizar para recalcular`;
+    }
+  }catch(e){ /* sem curva salva ainda; tela fica no estado inicial */ }
+}
+
 async function atualizarCurva(){
   const btn = document.getElementById('btnCurva');
   const status = document.getElementById('curvaStatus');
@@ -1938,7 +1963,7 @@ async function atualizarCurva(){
     _curvaDados = data;
     renderCurva(data);
     const errLojas = Object.keys(data.erros||{});
-    status.textContent = `✓ Atualizado agora · ${data.totalItens} itens analisados`
+    status.textContent = `✓ Atualizado e salvo · ${fmtDataHora(data.last_curva)} · ${data.totalItens} itens`
       + (errLojas.length ? ` · ⚠️ lojas com erro: ${errLojas.join(', ')}` : '');
   }catch(e){
     status.textContent = '✗ Erro: ' + e.message;
@@ -1974,12 +1999,13 @@ function renderCurva(data){
       const cor = curvaBg[it.curva] || 'var(--muted)';
       // "Zerado em": lojas sem estoque
       const zeradas = (it.lojasZeradas||[]).map(z=>z.label).join(', ') || '—';
-      // "Ação sugerida": transferir (se houver estoque em outra loja) ou comprar
+      // "Ação sugerida": transferir (de quem tem estoque para quem zerou) ou comprar
       let acao;
-      if (it.transferencia && it.transferencia.de.length){
+      if (it.transferencia && it.transferencia.de.length && it.transferencia.para.length){
         const origem = it.transferencia.de
           .map(d=>`${d.label} (${d.estoque} un)`).join(' ou ');
-        acao = `<span style="background:#1f8b4c;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap">🔄 Transferir de ${origem}</span>`;
+        const destino = it.transferencia.para.map(p=>p.label).join(' e ');
+        acao = `<span style="background:#1f8b4c;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap">🔄 Transferir de ${origem} para ${destino}</span>`;
       } else {
         acao = `<span style="background:var(--rj);color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap">🛒 Comprar</span>`;
       }
@@ -2038,8 +2064,10 @@ function exportarCurvaCsv(){
   const zerando = _curvaDados.itensZerando || [];
   const head = ['Status','Produto','SKU','Curva','Estoque','Faturamento','% do giro','Unidades vendidas','Venda media/dia','Dias ate zerar','R$/dia em risco','Zerado em','Acao sugerida'];
   const acaoDe = (it) => {
-    if (it.transferencia && it.transferencia.de && it.transferencia.de.length){
-      return 'Transferir de ' + it.transferencia.de.map(d=>`${d.label} (${d.estoque} un)`).join(' ou ');
+    if (it.transferencia && it.transferencia.de && it.transferencia.de.length && it.transferencia.para && it.transferencia.para.length){
+      const origem = it.transferencia.de.map(d=>`${d.label} (${d.estoque} un)`).join(' ou ');
+      const destino = it.transferencia.para.map(p=>p.label).join(' e ');
+      return `Transferir de ${origem} para ${destino}`;
     }
     return 'Comprar';
   };
@@ -2709,6 +2737,7 @@ function mostrarResultadoMeli(data){
   render();
   updateModeUI();
   _dirty = false; updateSaveState();
+  carregarCurvaSalva();   // mostra a última curva salva (se houver), sem recalcular
 })();
 </script>
 
