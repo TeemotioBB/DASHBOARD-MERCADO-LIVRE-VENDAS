@@ -1936,48 +1936,106 @@ async function consolidateMonth(){
 // Preenche o seletor de meses arquivados
 async function refreshMonthList(){
   try{
-    const r = await fetch('/api/months');
-    const data = await r.json();
     const sel = document.getElementById('viewMonth');
     if(!sel) return;
+
+    // 1) meses consolidados (com snapshot completo no servidor)
+    let consolidados = [];
+    try{
+      const r = await fetch('/api/months');
+      const data = await r.json();
+      consolidados = (data.months||[]).map(m=>m.mes);
+    }catch(e){}
+    const keysConsolidados = new Set(consolidados.map(normMonthKey));
+
+    // 2) meses que existem só no histórico (vieram da sincronização)
+    const doHist = (histMonths||[])
+      .map(m=>m.mes)
+      .filter(nome => !keysConsolidados.has(normMonthKey(nome)));
+
+    // junta tudo e ordena cronologicamente (mais recente primeiro)
+    const todos = [...consolidados, ...doHist]
+      .filter((v,i,a)=> a.findIndex(x=>normMonthKey(x)===normMonthKey(v))===i)
+      .sort((a,b)=> normMonthOrder(b) - normMonthOrder(a));
+
     const atual = '__atual__';
     let html = `<option value="${atual}">📍 Mês atual (ao vivo)</option>`;
-    (data.months||[]).forEach(m=>{
-      html += `<option value="${encodeURIComponent(m.mes)}">📦 ${m.mes}</option>`;
+    todos.forEach(mes=>{
+      const temSnap = keysConsolidados.has(normMonthKey(mes));
+      const icon = temSnap ? '📦' : '📊';   // 📦 = completo, 📊 = só totais
+      html += `<option value="${encodeURIComponent(mes)}">${icon} ${mes}</option>`;
     });
     sel.innerHTML = html;
   }catch(e){}
 }
 
-// Troca a visualização entre mês atual e um mês arquivado
+// Troca a visualização entre mês atual e um mês arquivado.
+// Reconstrói TODO o dashboard com o máximo de detalhe disponível para o mês.
 async function onViewMonthChange(){
   const sel = document.getElementById('viewMonth');
   const val = sel.value;
+
   if(val === '__atual__'){
     VIEWING_ARCHIVED = false;
     await loadFromServer();
     populateConfigInputs();
     render();
     updateModeUI();
-    showToast('Mês atual');
+    showToast('Mês atual (ao vivo)');
     return;
   }
-  // Visualizar mês arquivado (sempre somente leitura)
+
+  const nomeMes = decodeURIComponent(val);
+
+  // 1) Tenta carregar o SNAPSHOT completo (dia a dia, Ads, visitas, reputação)
   try{
     const r = await fetch('/api/months/'+val);
-    if(!r.ok) throw new Error();
-    const data = await r.json();
-    const snap = data.snapshot;
-    if(snap){
-      VIEWING_ARCHIVED = true;
-      config = Object.assign({}, config, snap.config);
-      rows = snap.rows || [];
-      populateConfigInputs();
-      render();
-      updateModeUI();
-      showToast('Vendo: '+decodeURIComponent(val));
+    if(r.ok){
+      const data = await r.json();
+      const snap = data.snapshot;
+      if(snap && snap.config){
+        VIEWING_ARCHIVED = true;
+        config = Object.assign({}, config, snap.config);
+        rows = snap.rows || [];
+        populateConfigInputs();
+        render();
+        updateModeUI();
+        showToast('Vendo: '+nomeMes+' (detalhe completo)');
+        return;
+      }
     }
-  }catch(e){ showToast('✗ Erro ao abrir mês'); }
+  }catch(e){ /* sem snapshot: cai no histórico abaixo */ }
+
+  // 2) Sem snapshot → reconstrói a partir da linha do HISTÓRICO (só totais)
+  const h = (histMonths||[]).find(m=>normMonthKey(m.mes)===normMonthKey(nomeMes));
+  if(!h){ showToast('✗ Mês não encontrado'); return; }
+
+  VIEWING_ARCHIVED = true;
+  // Monta um "mês ao vivo" sintético com os totais conhecidos.
+  // Como não há detalhamento diário, criamos UMA linha com o total do mês,
+  // para que Visão Geral, Ads e Crescimento fiquem coerentes.
+  config = Object.assign({}, config, {
+    mes: h.mes,
+    rjInvest: h.invest ? h.invest/3 : 0,   // sem split por loja: distribui igual
+    bhInvest: h.invest ? h.invest/3 : 0,
+    esInvest: h.invest ? h.invest/3 : 0,
+    rjRecAds: h.recAds ? h.recAds/3 : 0,
+    bhRecAds: h.recAds ? h.recAds/3 : 0,
+    esRecAds: h.recAds ? h.recAds/3 : 0,
+  });
+  // Deriva mês/ano corretos da chave normalizada (ex: 'mai26' -> 05/2026)
+  const _km = normMonthKey(h.mes);
+  const _mesNum = {jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12}[_km.slice(0,3)] || 1;
+  const _anoNum = 2000 + (parseInt(_km.slice(3)) || 0);
+  rows = [{
+    data: `01/${String(_mesNum).padStart(2,'0')}/${_anoNum}`,
+    dia: '—',
+    rj: h.rj||0, bh: h.bh||0, es: h.es||0
+  }];
+  populateConfigInputs();
+  render();
+  updateModeUI();
+  showToast('Vendo: '+nomeMes+' (totais do mês — sem detalhe diário)');
 }
 
 // ── Admin / login ──
@@ -2188,7 +2246,14 @@ async function meliSync(){
     mostrarResultadoMeli(data);
     if(IS_ADMIN){
       meliRefreshStatus();
-      showToast('✓ Dados atualizados — confira e clique em Salvar');
+      // Salva automaticamente no servidor para que o link já fique
+      // atualizado para qualquer visitante, sem precisar clicar em Salvar.
+      try{
+        await saveToServer();
+        showToast('✓ Dados atualizados e salvos para todos');
+      }catch(e){
+        showToast('✓ Atualizado, mas falhou ao salvar — clique em 💾 Salvar');
+      }
     } else {
       showToast('✓ Dados atualizados na sua tela');
     }
